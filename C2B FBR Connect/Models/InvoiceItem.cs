@@ -1,0 +1,44 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace C2B_FBR_Connect.Models
+{
+    public class InvoiceItem
+    {
+        // Basic item details
+        public string ItemName { get; set; }
+        public int Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+        public decimal TotalPrice { get; set; }
+
+        // Tax details
+        public decimal TaxRate { get; set; }
+        public decimal SalesTaxAmount { get; set; }
+        public decimal TotalValue { get; set; }
+
+        // FBR-specific fields
+        public string HSCode { get; set; }
+        public string UnitOfMeasure { get; set; }
+        public string RetailPrice { get; set; }
+        public decimal ExtraTax { get; set; }
+        public decimal FurtherTax { get; set; }
+        public decimal FedPayable { get; set; }
+        public decimal SalesTaxWithheldAtSource { get; set; }
+        public decimal Discount { get; set; }
+        public string SaleType { get; set; }
+
+        public InvoiceItem()
+        {
+            Quantity = 1;
+            UnitOfMeasure = "Unit";
+            ExtraTax = 0;
+            FurtherTax = 0;
+            FedPayable = 0;
+            SalesTaxWithheldAtSource = 0;
+            Discount = 0;
+        }
+    }
+}
