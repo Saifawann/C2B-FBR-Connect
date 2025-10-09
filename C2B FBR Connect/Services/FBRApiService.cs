@@ -40,14 +40,6 @@ namespace C2B_FBR_Connect.Services
                     };
                 }
 
-                if (string.IsNullOrEmpty(invoice.InvoiceNumber))
-                {
-                    return new FBRResponse
-                    {
-                        Success = false,
-                        ErrorMessage = "Invoice number is required."
-                    };
-                }
 
                 // Set authentication header
                 _httpClient.DefaultRequestHeaders.Clear();
@@ -59,6 +51,9 @@ namespace C2B_FBR_Connect.Services
                     NullValueHandling = NullValueHandling.Ignore,
                     Formatting = Formatting.Indented
                 });
+
+                // ✅ Log the invoice body before sending
+                System.Diagnostics.Debug.WriteLine("Uploading invoice to FBR API. Invoice Body:\n{InvoiceJson}", json);
 
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
@@ -97,7 +92,7 @@ namespace C2B_FBR_Connect.Services
                     ErrorMessage = $"Network error: {ex.Message}"
                 };
             }
-            catch (TaskCanceledException ex)
+            catch (TaskCanceledException)
             {
                 return new FBRResponse
                 {
@@ -119,93 +114,6 @@ namespace C2B_FBR_Connect.Services
                 {
                     Success = false,
                     ErrorMessage = $"Unexpected error: {ex.Message}"
-                };
-            }
-        }
-
-        /// <summary>
-        /// Verifies the connection to FBR API with the provided token
-        /// </summary>
-        /// <param name="authToken">FBR authentication token</param>
-        /// <returns>True if connection is successful</returns>
-        public async Task<FBRResponse> VerifyConnection(string authToken)
-        {
-            try
-            {
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
-
-                var response = await _httpClient.GetAsync($"{_baseUrl}verify");
-                var responseContent = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    return new FBRResponse
-                    {
-                        Success = true,
-                        ResponseData = responseContent
-                    };
-                }
-                else
-                {
-                    return new FBRResponse
-                    {
-                        Success = false,
-                        ErrorMessage = $"Connection verification failed: {response.StatusCode}",
-                        ResponseData = responseContent
-                    };
-                }
-            }
-            catch (Exception ex)
-            {
-                return new FBRResponse
-                {
-                    Success = false,
-                    ErrorMessage = $"Connection error: {ex.Message}"
-                };
-            }
-        }
-
-        /// <summary>
-        /// Retrieves invoice status from FBR by IRN
-        /// </summary>
-        /// <param name="irn">Invoice Reference Number</param>
-        /// <param name="authToken">FBR authentication token</param>
-        /// <returns>FBR response with invoice status</returns>
-        public async Task<FBRResponse> GetInvoiceStatus(string irn, string authToken)
-        {
-            try
-            {
-                _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
-
-                var response = await _httpClient.GetAsync($"{_baseUrl}validateinvoicedata_sb?irn={irn}");
-                var responseContent = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    return new FBRResponse
-                    {
-                        Success = true,
-                        ResponseData = responseContent
-                    };
-                }
-                else
-                {
-                    return new FBRResponse
-                    {
-                        Success = false,
-                        ErrorMessage = $"Status check failed: {response.StatusCode}",
-                        ResponseData = responseContent
-                    };
-                }
-            }
-            catch (Exception ex)
-            {
-                return new FBRResponse
-                {
-                    Success = false,
-                    ErrorMessage = $"Error checking status: {ex.Message}"
                 };
             }
         }

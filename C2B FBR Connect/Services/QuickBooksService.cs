@@ -259,24 +259,24 @@ namespace C2B_FBR_Connect.Services
                                     // ✅ Split tax logic: If rate > 18%, split into standard tax and extra tax
                                     decimal displayTaxRate;
                                     decimal standardTaxAmount;
-                                    decimal extraTaxAmount;
+                                    decimal furtherTax;
 
                                     if (actualTaxRate > 18)
                                     {
                                         // Tax rate is above 18% - split it
                                         displayTaxRate = 18; // Show only 18% as the rate
                                         standardTaxAmount = Convert.ToDecimal(lineAmount * 0.18); // Calculate 18% of line amount
-                                        extraTaxAmount = Convert.ToDecimal(salesTaxAmount) - standardTaxAmount; // Remaining goes to extra tax
+                                        furtherTax = Convert.ToDecimal(salesTaxAmount) - standardTaxAmount; // Remaining goes to extra tax
 
                                         System.Diagnostics.Debug.WriteLine($"Tax split - Original: {actualTaxRate}%, Amount: {salesTaxAmount}");
-                                        System.Diagnostics.Debug.WriteLine($"  Standard (18%): {standardTaxAmount}, Extra: {extraTaxAmount}");
+                                        System.Diagnostics.Debug.WriteLine($"  Standard (18%): {standardTaxAmount}, Extra: {furtherTax}");
                                     }
                                     else
                                     {
                                         // Tax rate is 18% or below - use as is
                                         displayTaxRate = Convert.ToDecimal(actualTaxRate);
                                         standardTaxAmount = Convert.ToDecimal(salesTaxAmount);
-                                        extraTaxAmount = 0;
+                                        furtherTax = 0;
                                     }
 
                                     var item = new InvoiceItem
@@ -289,9 +289,9 @@ namespace C2B_FBR_Connect.Services
                                         TotalPrice = Convert.ToDecimal(lineAmount),
                                         TaxRate = displayTaxRate, // Show 18% max
                                         SalesTaxAmount = standardTaxAmount, // Standard tax (max 18%)
-                                        TotalValue = Convert.ToDecimal(lineAmount) + standardTaxAmount + extraTaxAmount, // Total includes both
+                                        TotalValue = Convert.ToDecimal(lineAmount) + standardTaxAmount + furtherTax, // Total includes both
                                         RetailPrice = retailPrice,
-                                        ExtraTax = extraTaxAmount, // Amount above 18%
+                                        ExtraTax = furtherTax, // Amount above 18%
                                         FurtherTax = 0
                                     };
 
