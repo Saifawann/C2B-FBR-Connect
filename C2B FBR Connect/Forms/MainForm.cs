@@ -1,5 +1,4 @@
-﻿using C2B_FBR_Connect.Helpers;
-using C2B_FBR_Connect.Managers;
+﻿using C2B_FBR_Connect.Managers;
 using C2B_FBR_Connect.Models;
 using C2B_FBR_Connect.Services;
 using System;
@@ -322,32 +321,63 @@ namespace C2B_FBR_Connect.Forms
 
         private void FormatDataGridView(List<Invoice> invoices)
         {
-            InvoiceGridHelper.FormatDataGridView(dgvInvoices, invoices);
-            // Hide and format columns as before
-            InvoiceGridHelper.HideColumn(dgvInvoices, "Id");
-            InvoiceGridHelper.HideColumn(dgvInvoices, "QuickBooksInvoiceId");
-            InvoiceGridHelper.HideColumn(dgvInvoices, "CompanyName");
-            //InvoiceGridHelper.HideColumn(dgvInvoices, "ErrorMessage");
-            InvoiceGridHelper.HideColumn(dgvInvoices, "FBR_QRCode");
-            InvoiceGridHelper.HideColumn(dgvInvoices, "CreatedDate");
+            if (invoices == null || invoices.Count == 0) return;
 
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "InvoiceNumber", "Invoice #", 120);
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "CustomerName", "Customer", 200);
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "CustomerNTN", "NTN/CNIC", 150);
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "Amount", "Amount", 120, "N2");
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "Status", "Status", 100);
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "FBR_IRN", "FBR IRN", 180);
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, "UploadDate", "Upload Date", 150, "dd-MMM-yyyy HH:mm");
+            // Hide unnecessary columns
+            HideColumn("Id");
+            HideColumn("QuickBooksInvoiceId");
+            HideColumn("CompanyName");
+            //HideColumn("ErrorMessage");
+            HideColumn("FBR_QRCode");
+            HideColumn("CreatedDate");
+
+            // Set column headers and formatting
+            SetColumnHeader("InvoiceNumber", "Invoice #", 120);
+            SetColumnHeader("CustomerName", "Customer", 200);
+            SetColumnHeader("CustomerNTN", "NTN/CNIC", 150);
+            SetColumnHeader("Amount", "Amount", 120, "N2");
+            SetColumnHeader("Status", "Status", 100);
+            SetColumnHeader("FBR_IRN", "FBR IRN", 180);
+            SetColumnHeader("UploadDate", "Upload Date", 150, "dd-MMM-yyyy HH:mm");
+
+            // Color code rows by status
+            foreach (DataGridViewRow row in dgvInvoices.Rows)
+            {
+                var status = row.Cells["Status"]?.Value?.ToString();
+                switch (status)
+                {
+                    case "Uploaded":
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(200, 250, 205);
+                        break;
+                    case "Failed":
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 205, 210);
+                        break;
+                    case "Pending":
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 225);
+                        break;
+                }
+            }
         }
 
         private void HideColumn(string columnName)
         {
-            InvoiceGridHelper.HideColumn(dgvInvoices, columnName);
+            if (dgvInvoices.Columns[columnName] != null)
+                dgvInvoices.Columns[columnName].Visible = false;
         }
 
         private void SetColumnHeader(string columnName, string headerText, int width = -1, string format = null)
         {
-            InvoiceGridHelper.SetColumnHeader(dgvInvoices, columnName, headerText, width, format);
+            if (dgvInvoices.Columns[columnName] != null)
+            {
+                dgvInvoices.Columns[columnName].HeaderText = headerText;
+                if (width > 0)
+                {
+                    dgvInvoices.Columns[columnName].AutoSizeMode = DataGridViewAutoSizeColumnMode.None;
+                    dgvInvoices.Columns[columnName].Width = width;
+                }
+                if (!string.IsNullOrEmpty(format))
+                    dgvInvoices.Columns[columnName].DefaultCellStyle.Format = format;
+            }
         }
 
         private void UpdateStatistics()

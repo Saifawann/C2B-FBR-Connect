@@ -52,8 +52,10 @@ namespace C2B_FBR_Connect.Services
                     Formatting = Formatting.Indented
                 });
 
-                // ✅ Log the invoice body before sending
-                System.Diagnostics.Debug.WriteLine("Uploading invoice to FBR API. Invoice Body:\n{InvoiceJson}", json);
+
+                // ✅ Log the invoice body before sending (Debug and Console)
+                System.Diagnostics.Debug.WriteLine($"Uploading invoice to FBR API. Invoice Body:\n{json}");
+                Console.WriteLine("\n======= FBR API JSON Payload =======\n" + json + "\n====================================\n");
 
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
