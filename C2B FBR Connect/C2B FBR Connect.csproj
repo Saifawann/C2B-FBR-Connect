@@ -10,6 +10,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+	  <None Remove="assets\fbr_logo.png" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<COMReference Include="QBFC16Lib">
 			<WrapperTool>tlbimp</WrapperTool>
 			<VersionMinor>0</VersionMinor>
@@ -22,8 +26,16 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <Content Include="assets\fbr_logo.png">
+	    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+	  </Content>
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="iGrid.NET" Version="11.2.10" />
 		<PackageReference Include="itext" Version="9.3.0" />
+		<PackageReference Include="itext7" Version="9.3.0" />
+		<PackageReference Include="itext7.bouncy-castle-adapter" Version="9.3.0" />
 		<PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
 		<PackageReference Include="QRCoder" Version="1.6.0" />
 		<PackageReference Include="System.Data.SQLite.Core" Version="1.0.119" />

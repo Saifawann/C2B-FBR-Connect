@@ -16,6 +16,8 @@ namespace C2B_FBR_Connect.Models
         public string SellerNTN { get; set; }
         public string SellerAddress { get; set; }
         public string SellerProvince { get; set; }
+        public string SellerPhone { get; set; }
+        public string SellerEmail { get; set; }
 
         public DateTime CreatedDate { get; set; }
         public DateTime? ModifiedDate { get; set; }

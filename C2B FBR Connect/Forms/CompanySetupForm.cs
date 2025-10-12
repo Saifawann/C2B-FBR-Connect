@@ -15,6 +15,8 @@ namespace C2B_FBR_Connect.Forms
         private TextBox txtSellerNTN;
         private TextBox txtSellerAddress;
         private TextBox txtSellerProvince;
+        private TextBox txtSellerPhone;
+        private TextBox txtSellerEmail;
         private Button btnSave;
         private Button btnCancel;
         private Label lblCompanyName;
@@ -22,6 +24,8 @@ namespace C2B_FBR_Connect.Forms
         private Label lblSellerNTN;
         private Label lblSellerAddress;
         private Label lblSellerProvince;
+        private Label lblSellerPhone;
+        private Label lblSellerEmail;
         private Label lblInstructions;
         private GroupBox grpSellerInfo;
 
@@ -43,8 +47,11 @@ namespace C2B_FBR_Connect.Forms
                 // Auto-populate from QuickBooks company info (read-only for address)
                 txtSellerAddress.Text = existingCompany.SellerAddress ?? "Fetched from QuickBooks";
 
-                // Province is editable - populate from existing data (DO NOT override with QuickBooks data)
+                // Province is editable
                 txtSellerProvince.Text = existingCompany.SellerProvince ?? "";
+
+                txtSellerPhone.Text = existingCompany.SellerPhone ?? "";
+                txtSellerEmail.Text = existingCompany.SellerEmail ?? "";
 
                 Company = existingCompany;
             }
@@ -59,7 +66,7 @@ namespace C2B_FBR_Connect.Forms
         private void SetupCustomUI()
         {
             this.Text = "Company FBR Setup";
-            this.Size = new Size(500, 420);
+            this.Size = new Size(500, 460);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -101,12 +108,12 @@ namespace C2B_FBR_Connect.Forms
                 UseSystemPasswordChar = false
             };
 
-            // Seller Information Group Box
+            // ─── Seller Info Group ─────────────────────────────────────────────
             grpSellerInfo = new GroupBox
             {
                 Text = "Seller Information",
                 Location = new Point(12, 125),
-                Size = new Size(460, 200),
+                Size = new Size(460, 250),
                 Font = new Font("Arial", 9F, FontStyle.Bold)
             };
 
@@ -114,8 +121,7 @@ namespace C2B_FBR_Connect.Forms
             {
                 Text = "Seller NTN/CNIC:*",
                 Location = new Point(12, 30),
-                Size = new Size(120, 23),
-                Font = new Font("Arial", 9F, FontStyle.Regular)
+                Size = new Size(120, 23)
             };
 
             txtSellerNTN = new TextBox
@@ -130,14 +136,13 @@ namespace C2B_FBR_Connect.Forms
             {
                 Text = "Seller Address:",
                 Location = new Point(12, 65),
-                Size = new Size(120, 23),
-                Font = new Font("Arial", 9F, FontStyle.Regular)
+                Size = new Size(120, 23)
             };
 
             txtSellerAddress = new TextBox
             {
                 Location = new Point(128, 62),
-                Size = new Size(315, 60),
+                Size = new Size(315, 50),
                 Multiline = true,
                 ScrollBars = ScrollBars.Vertical,
                 Font = new Font("Arial", 9F),
@@ -149,45 +154,81 @@ namespace C2B_FBR_Connect.Forms
             lblSellerProvince = new Label
             {
                 Text = "Seller Province:*",
-                Location = new Point(12, 135),
-                Size = new Size(120, 23),
-                Font = new Font("Arial", 9F, FontStyle.Regular)
+                Location = new Point(12, 120),
+                Size = new Size(120, 23)
             };
 
             txtSellerProvince = new TextBox
             {
-                Location = new Point(128, 132),
+                Location = new Point(128, 117),
                 Size = new Size(315, 23),
                 Font = new Font("Arial", 9F),
                 PlaceholderText = "Enter Province (e.g., Punjab, Sindh, KPK, Balochistan)",
-                ReadOnly = false,  // Make it editable
-                BackColor = Color.White,  // Use white background for editable field
-                ForeColor = Color.Black  // Use normal text color
+                ReadOnly = false,
+                BackColor = Color.White,
+                ForeColor = Color.Black
             };
 
-            // Help label - updated text
+            lblSellerPhone = new Label
+            {
+                Text = "Seller Phone:",
+                Location = new Point(12, 155),
+                Size = new Size(120, 23)
+            };
+
+            txtSellerPhone = new TextBox
+            {
+                Location = new Point(128, 152),
+                Size = new Size(315, 23),
+                Font = new Font("Arial", 9F),
+                ReadOnly = true,
+                BackColor = Color.FromArgb(240, 240, 240),
+                ForeColor = Color.DarkGray
+            };
+
+            lblSellerEmail = new Label
+            {
+                Text = "Seller Email:",
+                Location = new Point(12, 185),
+                Size = new Size(120, 23)
+            };
+
+            txtSellerEmail = new TextBox
+            {
+                Location = new Point(128, 182),
+                Size = new Size(315, 23),
+                Font = new Font("Arial", 9F),
+                ReadOnly = true,
+                BackColor = Color.FromArgb(240, 240, 240),
+                ForeColor = Color.DarkGray
+            };
+
             Label lblHelp = new Label
             {
-                Text = "* Required fields. Address is auto-fetched from QuickBooks (read-only).",
-                Location = new Point(12, 165),
-                Size = new Size(430, 30),
+                Text = "* Required fields. Address, Phone, and Email are auto-fetched from QuickBooks.",
+                Location = new Point(12, 215),
+                Size = new Size(430, 25),
                 Font = new Font("Arial", 8F, FontStyle.Italic),
                 ForeColor = Color.DarkBlue
             };
 
-            // Add controls to group box
             grpSellerInfo.Controls.Add(lblSellerNTN);
             grpSellerInfo.Controls.Add(txtSellerNTN);
             grpSellerInfo.Controls.Add(lblSellerAddress);
             grpSellerInfo.Controls.Add(txtSellerAddress);
             grpSellerInfo.Controls.Add(lblSellerProvince);
             grpSellerInfo.Controls.Add(txtSellerProvince);
+            grpSellerInfo.Controls.Add(lblSellerPhone);
+            grpSellerInfo.Controls.Add(txtSellerPhone);
+            grpSellerInfo.Controls.Add(lblSellerEmail);
+            grpSellerInfo.Controls.Add(txtSellerEmail);
             grpSellerInfo.Controls.Add(lblHelp);
 
+            // ─── Buttons ─────────────────────────────────────────────
             btnSave = new Button
             {
                 Text = "Save",
-                Location = new Point(285, 345),
+                Location = new Point(285, 385),
                 Size = new Size(85, 35),
                 DialogResult = DialogResult.OK,
                 BackColor = Color.FromArgb(46, 125, 50),
@@ -200,7 +241,7 @@ namespace C2B_FBR_Connect.Forms
             btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(375, 345),
+                Location = new Point(375, 385),
                 Size = new Size(85, 35),
                 DialogResult = DialogResult.Cancel,
                 BackColor = Color.FromArgb(211, 47, 47),
@@ -218,6 +259,7 @@ namespace C2B_FBR_Connect.Forms
             this.Controls.Add(btnSave);
             this.Controls.Add(btnCancel);
         }
+
 
         private void BtnSave_Click(object sender, EventArgs e)
         {
@@ -258,6 +300,9 @@ namespace C2B_FBR_Connect.Forms
             Company.FBRToken = txtFBRToken.Text.Trim();
             Company.SellerNTN = txtSellerNTN.Text.Trim();
             Company.SellerProvince = txtSellerProvince.Text.Trim();
+            Company.SellerPhone = txtSellerPhone.Text?.Trim();
+            Company.SellerEmail = txtSellerEmail.Text?.Trim();
+
 
             // SellerAddress is auto-populated from QuickBooks
             Company.SellerAddress = txtSellerAddress.Text.Trim();

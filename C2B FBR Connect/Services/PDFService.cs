@@ -1,18 +1,19 @@
 ﻿using C2B_FBR_Connect.Models;
+using iText.IO.Font.Constants;
+using iText.IO.Image;
+using iText.Kernel.Colors;
+using iText.Kernel.Font;
+using iText.Kernel.Pdf;
+using iText.Layout;
+using iText.Layout.Borders;
+using iText.Layout.Element;
+using iText.Layout.Properties;
+using QRCoder;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using iText.Kernel.Pdf;
-using iText.Layout;
-using iText.Layout.Element;
-using iText.Layout.Properties;
-using iText.Kernel.Colors;
-using iText.Kernel.Font;
-using iText.IO.Font.Constants;
-using iText.IO.Image;
-using QRCoder;
 
 namespace C2B_FBR_Connect.Services
 {
@@ -23,228 +24,319 @@ namespace C2B_FBR_Connect.Services
 
         public PDFService()
         {
-            // Initialize fonts once
             _boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
             _normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
         }
 
         public void GenerateInvoicePDF(Invoice invoice, FBRInvoicePayload details, string outputPath)
         {
-            if (invoice == null)
-                throw new ArgumentNullException(nameof(invoice));
-            if (details == null)
-                throw new ArgumentNullException(nameof(details));
-            if (string.IsNullOrWhiteSpace(outputPath))
-                throw new ArgumentException("Output path cannot be empty", nameof(outputPath));
+            ValidateInputs(invoice, details, outputPath);
+            EnsureDirectoryExists(outputPath);
 
-            // Ensure directory exists
-            var directory = Path.GetDirectoryName(outputPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            using (var writer = new PdfWriter(outputPath))
+            using (var pdfDoc = new PdfDocument(writer))
+            using (var document = new Document(pdfDoc))
             {
-                Directory.CreateDirectory(directory);
-            }
-
-            try
-            {
-                using (var writer = new PdfWriter(outputPath))
-                using (var pdf = new PdfDocument(writer))
-                using (var document = new Document(pdf))
-                {
-                    // Set margins
-                    document.SetMargins(36, 36, 36, 36);
-
-                    AddTitle(document);
-                    AddCompanyInfo(document, invoice, details);
-                    AddItemsTable(document, details);
-                    AddTotals(document, details);
-                    AddFBRInfo(document, invoice);
-                }
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException($"Failed to generate PDF: {ex.Message}", ex);
+                document.SetMargins(30, 30, 40, 30);
+                BuildPDFContent(document, invoice, details);
             }
         }
 
-        private void AddTitle(Document document)
+        private void ValidateInputs(Invoice invoice, FBRInvoicePayload details, string outputPath)
         {
-            var title = new Paragraph("TAX INVOICE")
+            if (invoice == null) throw new ArgumentNullException(nameof(invoice));
+            if (details == null) throw new ArgumentNullException(nameof(details));
+            if (string.IsNullOrWhiteSpace(outputPath)) throw new ArgumentException("Output path cannot be empty");
+        }
+
+        private void EnsureDirectoryExists(string path)
+        {
+            var dir = Path.GetDirectoryName(path);
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+        }
+
+        // 🔹 Core Layout Builder
+        private void BuildPDFContent(Document doc, Invoice invoice, FBRInvoicePayload details)
+        {
+            AddHeaderSection(doc, details);
+            AddInvoiceTitle(doc);
+            AddCustomerAndPaymentSection(doc, invoice, details);
+            AddItemsSection(doc, details);
+            AddAmountInWords(doc, details);
+            AddTotalsSection(doc, details);
+            AddFBRSection(doc, invoice);
+            AddFooter(doc);
+        }
+
+        #region Header
+        private void AddHeaderSection(Document doc, FBRInvoicePayload details)
+        {
+            Table header = new Table(UnitValue.CreatePercentArray(new float[] { 2, 1 }))
+                .UseAllAvailableWidth();
+
+            // Left: Company Info
+            var companyInfo = new Paragraph(details.SellerBusinessName ?? "N/A")
+                .SetFont(_boldFont).SetFontSize(12).SetMarginBottom(2);
+            companyInfo.Add("\n" + (details.SellerAddress ?? ""))
+                        .Add("\nContact: " + (""))
+                        .Add("\nEmail: " + (""));
+            header.AddCell(new Cell().Add(companyInfo)
+                .SetBorder(Border.NO_BORDER));
+
+            // Right: Tax Info
+            var taxInfo = new Paragraph($"NTN: {details.SellerNTN ?? "N/A"}")
+                .SetFont(_normalFont).SetFontSize(10);
+            taxInfo.Add("\nSTRN: " + ("N/A"))
+                   .Add("\nPOS ID: " + ("N/A"));
+            header.AddCell(new Cell().Add(taxInfo)
+                .SetBorder(Border.NO_BORDER)
+                .SetTextAlignment(TextAlignment.RIGHT));
+
+            doc.Add(header);
+            doc.Add(new Paragraph("\n"));
+        }
+
+        private void AddInvoiceTitle(Document doc)
+        {
+            var title = new Paragraph("SALES TAX INVOICE")
                 .SetFont(_boldFont)
-                .SetFontSize(18)
+                .SetFontSize(16)
                 .SetTextAlignment(TextAlignment.CENTER)
-                .SetMarginBottom(20);
-
-            document.Add(title);
+                .SetMarginBottom(10);
+            doc.Add(title);
         }
+        #endregion
 
-        private void AddCompanyInfo(Document document, Invoice invoice, FBRInvoicePayload details)
+        #region Customer + Payment
+        private void AddCustomerAndPaymentSection(Document doc, Invoice invoice, FBRInvoicePayload details)
         {
-            document.Add(new Paragraph($"Company: {invoice.CompanyName ?? "N/A"}")
-                .SetFont(_boldFont)
-                .SetFontSize(10));
+            Table info = new Table(UnitValue.CreatePercentArray(new float[] { 1, 1 }))
+                .UseAllAvailableWidth()
+                .SetMarginBottom(10);
 
-            document.Add(new Paragraph($"Invoice No: {invoice.InvoiceNumber ?? "N/A"}")
-                .SetFont(_normalFont)
-                .SetFontSize(10));
+            // Left: Customer Info
+            var customer = new Paragraph("To: M/s " + (invoice.CustomerName ?? "N/A"))
+                .SetFont(_boldFont).SetFontSize(10);
+            customer.Add("\nAddress: " + (""))
+                    .Add("\nPhone: " + (""));
+            info.AddCell(new Cell().Add(customer).SetPadding(8)
+                .SetBorder(new SolidBorder(ColorConstants.GRAY, 0.5f)));
 
-            document.Add(new Paragraph($"Date: {details.InvoiceDate:dd-MMM-yyyy}")
-                .SetFont(_normalFont)
-                .SetFontSize(10));
+            // Right: Payment Terms
+            var payment = new Paragraph("Terms of Payment")
+                .SetFont(_boldFont).SetFontSize(10);
+            payment.Add("\nInvoice #: " + (invoice.InvoiceNumber ?? "N/A"))
+                   .Add("\nDate: " + details.InvoiceDate.ToString("dd-MMM-yyyy"))
+                   .Add("\nPayment Mode: " + ("Cash"));
+            info.AddCell(new Cell().Add(payment).SetPadding(8)
+                .SetBorder(new SolidBorder(ColorConstants.GRAY, 0.5f)));
 
-            document.Add(new Paragraph($"Customer: {invoice.CustomerName ?? "N/A"}")
-                .SetFont(_normalFont)
-                .SetFontSize(10)
-                .SetMarginBottom(15));
+            doc.Add(info);
         }
+        #endregion
 
-        private void AddItemsTable(Document document, FBRInvoicePayload details)
+        #region Items Table
+        private void AddItemsSection(Document doc, FBRInvoicePayload details)
         {
             if (details.Items == null || details.Items.Count == 0)
             {
-                document.Add(new Paragraph("No items found")
-                    .SetFont(_normalFont)
-                    .SetFontSize(10));
+                doc.Add(new Paragraph("No items to display").SetFont(_normalFont).SetFontSize(10));
                 return;
             }
 
-            Table table = new Table(UnitValue.CreatePercentArray(new float[] { 3f, 1f, 1.5f, 1.5f, 1.5f }))
+            Table table = new Table(UnitValue.CreatePercentArray(new float[]
+                { 1, 3, 2, 1.5f, 1.5f, 1.5f, 1.5f, 1.5f }))
                 .UseAllAvailableWidth()
-                .SetMarginBottom(15);
+                .SetMarginTop(10);
 
-            // Add headers
-            AddTableHeader(table, "Description");
-            AddTableHeader(table, "Qty");
-            AddTableHeader(table, "Rate");
-            AddTableHeader(table, "Tax");
-            AddTableHeader(table, "Amount");
+            string[] headers = { "S#", "Description", "HS Code", "Qty", "Rate", "Amount", "Discount", "Net Amt" };
+            foreach (var h in headers)
+                table.AddHeaderCell(new Cell().Add(new Paragraph(h).SetFont(_boldFont).SetFontSize(9))
+                    .SetBackgroundColor(new DeviceRgb(230, 230, 230))
+                    .SetTextAlignment(TextAlignment.CENTER)
+                    .SetPadding(5));
 
-            // Add items
+            int index = 1;
             foreach (var item in details.Items)
             {
-                AddTableCell(table, item.ItemName ?? "N/A");
-                AddTableCell(table, item.Quantity.ToString("N0"));
-                AddTableCell(table, $"Rs. {item.UnitPrice:N2}");
-                AddTableCell(table, $"{item.TaxRate:N2}%");
-                AddTableCell(table, $"Rs. {item.TotalPrice:N2}");
+                table.AddCell(CreateItemCell(index.ToString(), TextAlignment.CENTER));
+                table.AddCell(CreateItemCell(item.ItemName ?? "", TextAlignment.LEFT));
+                table.AddCell(CreateItemCell(item.HSCode ?? "-", TextAlignment.CENTER));
+                table.AddCell(CreateItemCell(item.Quantity.ToString("N2"), TextAlignment.CENTER));
+                table.AddCell(CreateItemCell($"Rs. {item.UnitPrice:N2}", TextAlignment.RIGHT));
+                table.AddCell(CreateItemCell($"Rs. {item.TotalPrice:N2}", TextAlignment.RIGHT));
+                table.AddCell(CreateItemCell($"Rs. {item.Discount:N2}", TextAlignment.RIGHT));
+                table.AddCell(CreateItemCell($"Rs. {(item.TotalPrice - item.Discount):N2}", TextAlignment.RIGHT));
+                index++;
             }
 
-            document.Add(table);
+            doc.Add(table);
         }
 
-        private void AddTableHeader(Table table, string text)
+        private Cell CreateItemCell(string text, TextAlignment align)
         {
-            var cell = new Cell()
-                .Add(new Paragraph(text).SetFont(_boldFont).SetFontSize(10))
-                .SetBackgroundColor(new DeviceRgb(240, 240, 240))
-                .SetPadding(5)
-                .SetTextAlignment(TextAlignment.CENTER);
+            return new Cell().Add(new Paragraph(text).SetFont(_normalFont).SetFontSize(9))
+                .SetTextAlignment(align).SetPadding(5);
+        }
+        #endregion
 
-            table.AddHeaderCell(cell);
+        #region Amount in Words
+        private void AddAmountInWords(Document doc, FBRInvoicePayload details)
+        {
+            var total = details.TotalAmount + details.TaxAmount;
+            string words = NumberToWords((long)Math.Round(total));
+            var para = new Paragraph("Amount in Words: " + words + " Rupees Only")
+                .SetFont(_boldFont)
+                .SetFontSize(9)
+                .SetMarginTop(10);
+            doc.Add(para);
         }
 
-        private void AddTableCell(Table table, string text)
+        private string NumberToWords(long number)
         {
-            var cell = new Cell()
-                .Add(new Paragraph(text).SetFont(_normalFont).SetFontSize(10))
-                .SetPadding(5);
+            if (number == 0) return "Zero";
+            if (number < 0) return "Minus " + NumberToWords(Math.Abs(number));
 
-            table.AddCell(cell);
+            string[] units = { "", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten",
+                               "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen",
+                               "Eighteen", "Nineteen" };
+            string[] tens = { "", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety" };
+
+            string words = "";
+            if ((number / 1000000) > 0)
+            {
+                words += NumberToWords(number / 1000000) + " Million ";
+                number %= 1000000;
+            }
+            if ((number / 1000) > 0)
+            {
+                words += NumberToWords(number / 1000) + " Thousand ";
+                number %= 1000;
+            }
+            if ((number / 100) > 0)
+            {
+                words += NumberToWords(number / 100) + " Hundred ";
+                number %= 100;
+            }
+            if (number > 0)
+            {
+                if (number < 20)
+                    words += units[number];
+                else
+                {
+                    words += tens[number / 10];
+                    if ((number % 10) > 0)
+                        words += "-" + units[number % 10];
+                }
+            }
+            return words.Trim();
         }
+        #endregion
 
-        private void AddTotals(Document document, FBRInvoicePayload details)
+        #region Totals Section
+        private void AddTotalsSection(Document doc, FBRInvoicePayload details)
         {
-            var totalWithTax = details.TotalAmount + details.TaxAmount;
-
-            // Create right-aligned totals table
-            Table totalsTable = new Table(UnitValue.CreatePercentArray(new float[] { 1f, 1f }))
+            var table = new Table(UnitValue.CreatePercentArray(new float[] { 1, 1 }))
                 .SetWidth(UnitValue.CreatePercentValue(40))
                 .SetHorizontalAlignment(iText.Layout.Properties.HorizontalAlignment.RIGHT)
-                .SetMarginBottom(15);
+                .SetMarginTop(10);
 
-            // Subtotal
-            totalsTable.AddCell(CreateTotalCell("Subtotal:", false));
-            totalsTable.AddCell(CreateTotalCell($"Rs. {details.TotalAmount:N2}", false));
+            AddTotalRow(table, "Gross Total", $"Rs. {details.TotalAmount:N2}");
+            AddTotalRow(table, "Discount", $"Rs. ");
+            AddTotalRow(table, "Sales Tax", $"Rs. {details.TaxAmount:N2}");
 
-            // Tax
-            totalsTable.AddCell(CreateTotalCell("Tax:", false));
-            totalsTable.AddCell(CreateTotalCell($"Rs. {details.TaxAmount:N2}", false));
+            var total = details.TotalAmount + details.TaxAmount;
+            AddTotalRow(table, "Total (Incl. Tax)", $"Rs. {total:N2}", true);
 
-            // Total
-            totalsTable.AddCell(CreateTotalCell("Total:", true));
-            totalsTable.AddCell(CreateTotalCell($"Rs. {totalWithTax:N2}", true));
-
-            document.Add(totalsTable);
+            doc.Add(table);
         }
 
-        private Cell CreateTotalCell(string text, bool isBold)
+        private void AddTotalRow(Table table, string label, string value, bool bold = false)
         {
-            return new Cell()
-                .Add(new Paragraph(text)
-                    .SetFont(isBold ? _boldFont : _normalFont)
-                    .SetFontSize(10))
-                .SetBorder(iText.Layout.Borders.Border.NO_BORDER)
-                .SetPadding(3)
-                .SetTextAlignment(TextAlignment.RIGHT);
+            table.AddCell(new Cell().Add(new Paragraph(label).SetFont(bold ? _boldFont : _normalFont).SetFontSize(9))
+                .SetBorder(Border.NO_BORDER)
+                .SetTextAlignment(TextAlignment.LEFT)
+                .SetPadding(3));
+            table.AddCell(new Cell().Add(new Paragraph(value).SetFont(bold ? _boldFont : _normalFont).SetFontSize(9))
+                .SetBorder(Border.NO_BORDER)
+                .SetTextAlignment(TextAlignment.RIGHT)
+                .SetPadding(3));
+        }
+        #endregion
+
+        #region FBR Section
+        private void AddFBRSection(Document doc, Invoice invoice)
+        {
+            doc.Add(new Paragraph("\n"));
+
+            Table fbr = new Table(UnitValue.CreatePercentArray(new float[] { 1, 1, 1 }))
+                .UseAllAvailableWidth();
+
+            // Left: FBR Logo
+            string logoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "fbr_logo.png");
+            if (File.Exists(logoPath))
+            {
+                var logo = new iText.Layout.Element.Image(ImageDataFactory.Create(logoPath))
+                    .SetWidth(80).SetHeight(80).SetHorizontalAlignment(iText.Layout.Properties.HorizontalAlignment.LEFT);
+                fbr.AddCell(new Cell().Add(logo).SetBorder(Border.NO_BORDER));
+            }
+            else
+            {
+                fbr.AddCell(new Cell().Add(new Paragraph("[FBR Logo Missing]").SetFont(_normalFont).SetFontSize(8))
+                    .SetBorder(Border.NO_BORDER));
+            }
+
+            // Center: IRN
+            var irnCell = new Cell().SetBorder(Border.NO_BORDER).SetTextAlignment(TextAlignment.CENTER);
+            irnCell.Add(new Paragraph("FBR INVOICE REFERENCE NUMBER")
+                .SetFont(_boldFont).SetFontSize(9));
+            irnCell.Add(new Paragraph(invoice.FBR_IRN ?? "N/A")
+                .SetFont(_normalFont).SetFontSize(9));
+            fbr.AddCell(irnCell);
+
+            // Right: QR Code
+            if (!string.IsNullOrEmpty(invoice.FBR_IRN))
+            {
+                var qrData = GenerateQRCodeImage(invoice.FBR_IRN);
+                var qrImage = new iText.Layout.Element.Image(qrData)
+                    .SetWidth(80).SetHeight(80)
+                    .SetHorizontalAlignment(iText.Layout.Properties.HorizontalAlignment.RIGHT);
+                fbr.AddCell(new Cell().Add(qrImage).SetBorder(Border.NO_BORDER));
+            }
+            else
+            {
+                fbr.AddCell(new Cell().Add(new Paragraph("QR Not Available").SetFont(_normalFont).SetFontSize(8))
+                    .SetBorder(Border.NO_BORDER)
+                    .SetTextAlignment(TextAlignment.RIGHT));
+            }
+
+            doc.Add(fbr);
         }
 
-        private void AddFBRInfo(Document document, Invoice invoice)
+        private ImageData GenerateQRCodeImage(string content)
         {
-            document.Add(new Paragraph("FBR Digital Invoice")
+            using var qrGenerator = new QRCodeGenerator();
+            using var qrCodeData = qrGenerator.CreateQrCode(content, QRCodeGenerator.ECCLevel.Q);
+            using var qrCode = new QRCode(qrCodeData);
+            using var bitmap = qrCode.GetGraphic(20, System.Drawing.Color.Black, System.Drawing.Color.White, true);
+            using var ms = new MemoryStream();
+            bitmap.Save(ms, ImageFormat.Png);
+            return ImageDataFactory.Create(ms.ToArray());
+        }
+        #endregion
+
+        #region Footer
+        private void AddFooter(Document doc)
+        {
+            doc.Add(new Paragraph("\n"));
+            doc.Add(new Paragraph("Powered by C2B FBR Connect")
                 .SetFont(_boldFont)
-                .SetFontSize(10)
-                .SetMarginTop(10));
-
-            document.Add(new Paragraph($"IRN: {invoice.FBR_IRN ?? "N/A"}")
-                .SetFont(_normalFont)
-                .SetFontSize(10));
-
-            // Generate and add QR Code
-            if (!string.IsNullOrEmpty(invoice.FBR_QRCode))
-            {
-                try
-                {
-                    var qrImageData = GenerateQRCodeImage(invoice.FBR_QRCode);
-                    if (qrImageData != null)
-                    {
-                        var qrImage = new iText.Layout.Element.Image(qrImageData)
-                            .SetWidth(150)
-                            .SetHeight(150)
-                            .SetHorizontalAlignment(iText.Layout.Properties.HorizontalAlignment.CENTER)
-                            .SetMarginTop(10);
-
-                        document.Add(qrImage);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Log error but continue - QR code is not critical
-                    Console.WriteLine($"Failed to generate QR code: {ex.Message}");
-                    document.Add(new Paragraph("QR Code unavailable")
-                        .SetFont(_normalFont)
-                        .SetFontSize(10));
-                }
-            }
+                .SetFontSize(9)
+                .SetTextAlignment(TextAlignment.CENTER)
+                .SetFontColor(ColorConstants.GRAY)
+                .SetMarginTop(20));
         }
-
-        private ImageData GenerateQRCodeImage(string qrContent)
-        {
-            using (var qrGenerator = new QRCodeGenerator())
-            {
-                using (var qrCodeData = qrGenerator.CreateQrCode(qrContent, QRCodeGenerator.ECCLevel.Q))
-                {
-                    using (var qrCode = new QRCode(qrCodeData))
-                    {
-                        using (var qrBitmap = qrCode.GetGraphic(5))
-                        {
-                            using (var ms = new MemoryStream())
-                            {
-                                qrBitmap.Save(ms, ImageFormat.Png);
-                                return ImageDataFactory.Create(ms.ToArray());
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        #endregion
     }
 }

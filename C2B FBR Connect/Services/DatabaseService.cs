@@ -40,6 +40,8 @@ namespace C2B_FBR_Connect.Services
                     SellerNTN TEXT,
                     SellerAddress TEXT,
                     SellerProvince TEXT,
+                    SellerPhone TEXT,
+                    SellerEmail TEXT,
                     CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
                     ModifiedDate DATETIME
                 );";
@@ -91,9 +93,12 @@ namespace C2B_FBR_Connect.Services
                     SellerNTN = reader["SellerNTN"]?.ToString(),
                     SellerAddress = reader["SellerAddress"]?.ToString(),
                     SellerProvince = reader["SellerProvince"]?.ToString(),
+                    SellerPhone = reader["SellerPhone"]?.ToString(),
+                    SellerEmail = reader["SellerEmail"]?.ToString(),
                     CreatedDate = Convert.ToDateTime(reader["CreatedDate"])
                 };
             }
+            return null;
             return null;
         }
 
@@ -104,14 +109,16 @@ namespace C2B_FBR_Connect.Services
 
             var cmd = new SQLiteCommand(@"
                 INSERT OR REPLACE INTO Companies 
-                (CompanyName, FBRToken, SellerNTN, SellerAddress, SellerProvince, ModifiedDate) 
-                VALUES (@name, @token, @ntn, @address, @province, @modified)", conn);
+                (CompanyName, FBRToken, SellerNTN, SellerAddress, SellerProvince, SellerPhone, SellerEmail, ModifiedDate) 
+                VALUES (@name, @token, @ntn, @address, @province, @phone, @email, @modified)", conn);
 
             cmd.Parameters.AddWithValue("@name", company.CompanyName);
             cmd.Parameters.AddWithValue("@token", company.FBRToken);
             cmd.Parameters.AddWithValue("@ntn", company.SellerNTN ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@address", company.SellerAddress ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@province", company.SellerProvince ?? (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("@phone", company.SellerPhone ?? (object)DBNull.Value);
+            cmd.Parameters.AddWithValue("@email", company.SellerEmail ?? (object)DBNull.Value);
             cmd.Parameters.AddWithValue("@modified", DateTime.Now);
 
             cmd.ExecuteNonQuery();

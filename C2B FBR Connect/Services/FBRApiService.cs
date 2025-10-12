@@ -1,36 +1,28 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Net.Http;
+﻿using C2B_FBR_Connect.Models;
 using Newtonsoft.Json;
+using System;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
-using C2B_FBR_Connect.Models;
 
 namespace C2B_FBR_Connect.Services
 {
     public class FBRApiService : IDisposable
     {
         private readonly HttpClient _httpClient;
-        private readonly string _baseUrl = "https://gw.fbr.gov.pk/di_data/v1/di/"; // Replace with actual FBR API URL
+        private readonly string _baseUrl = "https://gw.fbr.gov.pk/di_data/v1/di/";
 
         public FBRApiService()
         {
             _httpClient = new HttpClient();
-            _httpClient.Timeout = TimeSpan.FromSeconds(30);
         }
 
-        /// <summary>
-        /// Uploads an invoice to the FBR Digital Invoicing system
-        /// </summary>
-        /// <param name="invoice">The invoice payload with all FBR required fields</param>
-        /// <param name="authToken">FBR authentication token</param>
-        /// <returns>FBR response with IRN if successful</returns>
         public async Task<FBRResponse> UploadInvoice(FBRInvoicePayload invoice, string authToken)
         {
             try
             {
-                // Validate invoice data before sending
+                // ✅ Basic validation
                 if (string.IsNullOrEmpty(invoice.SellerNTN))
                 {
                     return new FBRResponse
@@ -40,74 +32,90 @@ namespace C2B_FBR_Connect.Services
                     };
                 }
 
+                // ✅ Map payload into FBR's expected format
+                var fbrBody = new
+                {
+                    invoiceType = invoice.InvoiceType,
+                    invoiceDate = invoice.InvoiceDate.ToString("yyyy-MM-dd"),
+                    invoiceRefNo = invoice.InvoiceNumber,
+                    scenarioId = "SN002", // default scenario
+                    sellerNTNCNIC = invoice.SellerNTN,
+                    sellerBusinessName = invoice.SellerBusinessName,
+                    sellerAddress = invoice.SellerAddress,
+                    sellerProvince = invoice.SellerProvince,
+                    buyerNTNCNIC = invoice.CustomerNTN,
+                    buyerBusinessName = invoice.CustomerName,
+                    buyerAddress = invoice.BuyerAddress,
+                    buyerProvince = invoice.BuyerProvince,
+                    buyerRegistrationType = invoice.BuyerRegistrationType,
+                    items = invoice.Items?.Select(item => new
+                    {
+                        hsCode = item.HSCode,
+                        productDescription = item.ItemName,
+                        rate = $"{item.TaxRate}%",
+                        uoM = item.UnitOfMeasure,
+                        quantity = item.Quantity,
+                        totalValues = item.TotalValue,
+                        valueSalesExcludingST = item.TotalPrice,
+                        fixedNotifiedValueOrRetailPrice = item.RetailPrice,
+                        salesTaxApplicable = item.SalesTaxAmount,
+                        extraTax = item.ExtraTax,
+                        furtherTax = item.FurtherTax,
+                        discount = item.Discount,
+                        fedPayable = item.FedPayable,
+                        salesTaxWithheldAtSource = item.SalesTaxWithheldAtSource,
+                        saleType = "Goods at standard rate (default)"
+                    }).ToList(),
+                    totalSalesValue = invoice.Subtotal,
+                    totalTaxCharged = invoice.TaxAmount,
+                    totalInvoiceValue = invoice.TotalAmount
+                };
 
-                // Set authentication header
+                var json = JsonConvert.SerializeObject(fbrBody, Formatting.Indented);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
                 _httpClient.DefaultRequestHeaders.Clear();
                 _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
 
-                // Serialize invoice to JSON
-                var json = JsonConvert.SerializeObject(invoice, new JsonSerializerSettings
-                {
-                    NullValueHandling = NullValueHandling.Ignore,
-                    Formatting = Formatting.Indented
-                });
-
-
-                // ✅ Log the invoice body before sending (Debug and Console)
-                System.Diagnostics.Debug.WriteLine($"Uploading invoice to FBR API. Invoice Body:\n{json}");
-                Console.WriteLine("\n======= FBR API JSON Payload =======\n" + json + "\n====================================\n");
-
-                var content = new StringContent(json, Encoding.UTF8, "application/json");
-
-                // Send request to FBR API
                 var response = await _httpClient.PostAsync($"{_baseUrl}postinvoicedata_sb", content);
-                var responseContent = await response.Content.ReadAsStringAsync();
+                var responseString = await response.Content.ReadAsStringAsync();
 
-                if (response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
-                    // Parse successful response
-                    dynamic result = JsonConvert.DeserializeObject(responseContent);
-
-                    return new FBRResponse
-                    {
-                        Success = true,
-                        IRN = result?.invoiceNumber?.ToString() ?? "",
-                        ResponseData = responseContent
-                    };
-                }
-                else
-                {
-                    // Handle error response
                     return new FBRResponse
                     {
                         Success = false,
-                        ErrorMessage = $"FBR API Error {response.StatusCode}: {responseContent}",
-                        ResponseData = responseContent
+                        ErrorMessage = $"HTTP {response.StatusCode}: {responseString}",
+                        ResponseData = responseString
                     };
                 }
-            }
-            catch (HttpRequestException ex)
-            {
+
+                // ✅ Parse the correct FBR response structure
+                dynamic parsed = JsonConvert.DeserializeObject(responseString);
+
+                string invoiceNumber = parsed?.invoiceNumber ?? "";
+                string dated = parsed?.dated ?? "";
+                string statusCode = parsed?.validationResponse?.statusCode ?? "";
+                string status = parsed?.validationResponse?.status ?? "";
+                string error = parsed?.validationResponse?.error ?? "";
+
+                // Extract invoice number from the first item in invoiceStatuses array
+                string fbrInvoiceNo = "";
+                if (parsed?.validationResponse?.invoiceStatuses != null &&
+                    parsed.validationResponse.invoiceStatuses.Count > 0)
+                {
+                    fbrInvoiceNo = parsed.validationResponse.invoiceStatuses[0].invoiceNo ?? "";
+                }
+
+                // Check if validation was successful
+                bool isSuccess = statusCode == "00" && status == "Valid";
+
                 return new FBRResponse
                 {
-                    Success = false,
-                    ErrorMessage = $"Network error: {ex.Message}"
-                };
-            }
-            catch (TaskCanceledException)
-            {
-                return new FBRResponse
-                {
-                    Success = false,
-                    ErrorMessage = "Request timeout. Please try again."
-                };
-            }
-            catch (JsonException ex)
-            {
-                return new FBRResponse
-                {
-                    Success = false,
-                    ErrorMessage = $"JSON error: {ex.Message}"
+                    Success = isSuccess,
+                    IRN = fbrInvoiceNo, // This is the FBR-generated invoice number
+                    ErrorMessage = isSuccess ? "" : error,
+                    ResponseData = responseString
                 };
             }
             catch (Exception ex)
@@ -115,7 +123,8 @@ namespace C2B_FBR_Connect.Services
                 return new FBRResponse
                 {
                     Success = false,
-                    ErrorMessage = $"Unexpected error: {ex.Message}"
+                    ErrorMessage = $"Exception: {ex.Message}",
+                    ResponseData = ex.ToString()
                 };
             }
         }

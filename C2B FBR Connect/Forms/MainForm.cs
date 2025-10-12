@@ -906,7 +906,6 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-
         private async void BtnUploadAll_Click(object sender, EventArgs e)
         {
             if (_currentCompany == null || string.IsNullOrEmpty(_currentCompany.FBRToken))
@@ -1048,6 +1047,16 @@ namespace C2B_FBR_Connect.Forms
                     if (string.IsNullOrEmpty(_currentCompany.SellerAddress))
                     {
                         _currentCompany.SellerAddress = qbCompanyInfo.Address;
+                    }
+
+                    if (string.IsNullOrEmpty(_currentCompany.SellerPhone))
+                    {
+                        _currentCompany.SellerPhone = qbCompanyInfo.Phone;
+                    }
+
+                    if (string.IsNullOrEmpty(_currentCompany.SellerEmail))
+                    {
+                        _currentCompany.SellerEmail = qbCompanyInfo.Email;
                     }
 
                     // ✅ NEVER set SellerProvince from QuickBooks
