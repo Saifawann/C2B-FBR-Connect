@@ -492,70 +492,60 @@ namespace C2B_FBR_Connect.Forms
 
             foreach (DataGridViewRow row in selectedRows)
             {
-                //var invoice = row.DataBoundItem as Invoice;
-                //if (invoice != null && invoice.Status != "Uploaded")
-                //{
-                //    statusLabel.Text = $"Uploading {invoice.InvoiceNumber}...";
-
-                //    try
-                //    {
-                //        bool success = await _invoiceManager.UploadToFBR(invoice, _currentCompany.FBRToken);
-                //        if (success)
-                //        {
-                //            uploaded++;
-                //        }
-                //        else
-                //        {
-                //            failed++;
-                //            // Get error from database
-                //            var updatedInvoice = _db.GetInvoices(_currentCompany.CompanyName)
-                //                .FirstOrDefault(i => i.Id == invoice.Id);
-
-                //            failedInvoices.Add((invoice.InvoiceNumber, updatedInvoice?.ErrorMessage ?? "Unknown error"));
-                //        }
-                //    }
-                //    catch (Exception ex)
-                //    {
-                //        failed++;
-                //        failedInvoices.Add((invoice.InvoiceNumber, ex.Message));
-                //    }
-
-                //    progressBar.Value++;
-                //}
                 var selectedInvoice = row.DataBoundItem as Invoice;
                 if (selectedInvoice != null && selectedInvoice.Status != "Uploaded")
                 {
-                    // ✅ Always use the invoice as stored in DB
+                    // ✅ Always reload from database to get latest data
                     var invoice = _db.GetInvoices(_currentCompany.CompanyName)
                                      .FirstOrDefault(i => i.Id == selectedInvoice.Id);
 
                     if (invoice == null)
+                    {
+                        failed++;
+                        failedInvoices.Add((selectedInvoice.InvoiceNumber, "Invoice not found in database"));
+                        progressBar.Value++;
                         continue;
+                    }
 
                     statusLabel.Text = $"Uploading {invoice.InvoiceNumber}...";
 
                     try
                     {
-                        bool success = await _invoiceManager.UploadToFBR(invoice, _currentCompany.FBRToken);
-                        if (success)
+                        var response = await _invoiceManager.UploadToFBR(invoice, _currentCompany.FBRToken);
+
+                        if (response.Success)
                         {
                             uploaded++;
                         }
                         else
                         {
                             failed++;
-                            // Get error from database
+
+                            // ✅ Get the updated invoice with error message from database
                             var updatedInvoice = _db.GetInvoices(_currentCompany.CompanyName)
                                 .FirstOrDefault(i => i.Id == invoice.Id);
 
-                            failedInvoices.Add((invoice.InvoiceNumber, updatedInvoice?.ErrorMessage ?? "Unknown error"));
+                            string errorMsg = !string.IsNullOrEmpty(updatedInvoice?.ErrorMessage)
+                                ? updatedInvoice.ErrorMessage
+                                : response.ErrorMessage ?? "Unknown error - no error message returned";
+
+                            failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
+
+                            // ✅ Log to debug window
+                            System.Diagnostics.Debug.WriteLine($"Failed to upload {invoice.InvoiceNumber}: {errorMsg}");
                         }
                     }
                     catch (Exception ex)
                     {
                         failed++;
-                        failedInvoices.Add((invoice.InvoiceNumber, ex.Message));
+                        string errorMsg = $"Exception: {ex.Message}";
+                        failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
+
+                        // ✅ Log exception to debug window
+                        System.Diagnostics.Debug.WriteLine($"Exception uploading {invoice.InvoiceNumber}: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                     }
+
 
                     progressBar.Value++;
                 }
@@ -565,50 +555,72 @@ namespace C2B_FBR_Connect.Forms
             progressBar.Visible = false;
             statusLabel.Text = $"Upload complete: {uploaded} success, {failed} failed";
 
-            // Show detailed results
+            // ✅ Show detailed results
             if (failedInvoices.Count > 0)
             {
                 var resultForm = new Form
                 {
                     Text = "Upload Results",
-                    Size = new Size(700, 500),
-                    StartPosition = FormStartPosition.CenterParent
+                    Size = new Size(900, 600),
+                    StartPosition = FormStartPosition.CenterParent,
+                    FormBorderStyle = FormBorderStyle.Sizable
                 };
 
                 var lblSummary = new Label
                 {
                     Text = $"✅ Uploaded: {uploaded}    ❌ Failed: {failed}",
                     Location = new Point(20, 20),
-                    Size = new Size(650, 30),
-                    Font = new Font("Arial", 11F, FontStyle.Bold)
+                    Size = new Size(850, 30),
+                    Font = new Font("Arial", 12F, FontStyle.Bold),
+                    ForeColor = failed > 0 ? Color.DarkRed : Color.DarkGreen
                 };
 
                 var lblFailedTitle = new Label
                 {
-                    Text = "Failed Invoices:",
+                    Text = "Failed Invoices Details:",
                     Location = new Point(20, 60),
-                    Size = new Size(150, 20),
-                    Font = new Font("Arial", 9F, FontStyle.Bold)
+                    Size = new Size(200, 20),
+                    Font = new Font("Arial", 10F, FontStyle.Bold),
+                    ForeColor = Color.DarkRed
                 };
 
                 var txtFailed = new TextBox
                 {
-                    Text = string.Join(Environment.NewLine + Environment.NewLine,
-                        failedInvoices.Select(f => $"Invoice: {f.InvoiceNumber}\nError: {f.Error}")),
+                    Text = string.Join(Environment.NewLine + new string('=', 80) + Environment.NewLine,
+                        failedInvoices.Select(f =>
+                            $"Invoice: {f.InvoiceNumber}\n" +
+                            $"Error:\n{f.Error}\n")),
                     Location = new Point(20, 85),
-                    Size = new Size(650, 350),
+                    Size = new Size(850, 450),
                     Multiline = true,
                     ReadOnly = true,
                     ScrollBars = ScrollBars.Vertical,
                     Font = new Font("Consolas", 9F),
-                    BackColor = Color.FromArgb(255, 245, 245)
+                    BackColor = Color.FromArgb(255, 245, 245),
+                    ForeColor = Color.DarkRed
+                };
+
+                var btnCopyErrors = new Button
+                {
+                    Text = "Copy Errors",
+                    Location = new Point(20, 545),
+                    Size = new Size(120, 35),
+                    BackColor = Color.FromArgb(33, 150, 243),
+                    ForeColor = Color.White,
+                    FlatStyle = FlatStyle.Flat
+                };
+                btnCopyErrors.Click += (s, e) =>
+                {
+                    Clipboard.SetText(txtFailed.Text);
+                    MessageBox.Show("Error details copied to clipboard!", "Success",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
                 };
 
                 var btnClose = new Button
                 {
                     Text = "Close",
-                    Location = new Point(570, 445),
-                    Size = new Size(100, 35),
+                    Location = new Point(750, 545),
+                    Size = new Size(120, 35),
                     BackColor = Color.FromArgb(96, 125, 139),
                     ForeColor = Color.White,
                     FlatStyle = FlatStyle.Flat
@@ -618,7 +630,9 @@ namespace C2B_FBR_Connect.Forms
                 resultForm.Controls.Add(lblSummary);
                 resultForm.Controls.Add(lblFailedTitle);
                 resultForm.Controls.Add(txtFailed);
+                resultForm.Controls.Add(btnCopyErrors);
                 resultForm.Controls.Add(btnClose);
+
                 resultForm.ShowDialog();
             }
             else
@@ -678,48 +692,15 @@ namespace C2B_FBR_Connect.Forms
                     if (string.IsNullOrEmpty(item.HSCode))
                         validationErrors.Add($"⚠️ HS Code missing for item: {item.ItemName}");
 
-                    if (string.IsNullOrEmpty(item.RetailPrice))
+                    if (item.RetailPrice == 0)
                         validationErrors.Add($"⚠️ Retail Price missing for item: {item.ItemName}");
                 }
 
                 // Build JSON object
-                var invoiceObject = new
-                {
-                    invoiceType = details.InvoiceType,
-                    invoiceDate = details.InvoiceDate.ToString("yyyy-MM-dd"),
-                    sellerNTNCNIC = details.SellerNTN,
-                    sellerBusinessName = details.SellerBusinessName,
-                    sellerProvince = details.SellerProvince,
-                    sellerAddress = details.SellerAddress,
-                    buyerNTNCNIC = details.CustomerNTN,
-                    buyerBusinessName = details.CustomerName,
-                    buyerProvince = details.BuyerProvince,
-                    buyerAddress = details.BuyerAddress,
-                    buyerRegistrationType = details.BuyerRegistrationType,
-                    invoiceRefNo = "",
-                    scenarioId = details.BuyerRegistrationType == "Registered" ? "SN001" : "SN002",
-                    items = details.Items.Select(item => new
-                    {
-                        hsCode = item.HSCode,
-                        productDescription = item.ItemName,
-                        rate = item.TaxRate > 0 ? $"{item.TaxRate:N0}%" : "0%",
-                        uoM = item.UnitOfMeasure,
-                        quantity = item.Quantity,
-                        totalValues = item.TotalValue,
-                        valueSalesExcludingST = item.TotalPrice,
-                        fixedNotifiedValueOrRetailPrice = item.RetailPrice,
-                        salesTaxApplicable = item.SalesTaxAmount,
-                        extraTax = item.ExtraTax,
-                        furtherTax = item.FurtherTax,
-                        discount = 0.00,
-                        fedPayable = 0.00,
-                        salesTaxWithheldAtSource = 0.00,
-                        saleType = "Goods at standard rate (default)"
-                    }).ToList()
-                };
+                var fbrPayload = _fbr.BuildFBRPayload(details);
 
                 // Convert to formatted JSON string
-                string json = Newtonsoft.Json.JsonConvert.SerializeObject(invoiceObject, Newtonsoft.Json.Formatting.Indented);
+                string json = Newtonsoft.Json.JsonConvert.SerializeObject(fbrPayload, Newtonsoft.Json.Formatting.Indented);
 
                 // Create main form
                 var detailForm = new Form
@@ -950,11 +931,14 @@ namespace C2B_FBR_Connect.Forms
 
                 try
                 {
-                    bool success = await _invoiceManager.UploadToFBR(invoice, _currentCompany.FBRToken);
-                    if (success) uploaded++;
-                    else failed++;
+                    var response = await _invoiceManager.UploadToFBR(invoice, _currentCompany.FBRToken);
+
+                    if (response.Success)
+                        uploaded++;
+                    else
+                        failed++;
                 }
-                catch
+                catch (Exception)
                 {
                     failed++;
                 }

@@ -185,7 +185,7 @@ namespace C2B_FBR_Connect.Services
             cmd.ExecuteNonQuery();
         }
 
-        public void UpdateInvoiceStatus(string qbInvoiceId, string status, string irn = null, string error = null)
+        public void UpdateInvoiceStatus(string qbInvoiceId, string status, string irn, string error = null)
         {
             using var conn = new SQLiteConnection(_connectionString);
             conn.Open();

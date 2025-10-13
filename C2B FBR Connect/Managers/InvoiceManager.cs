@@ -52,8 +52,10 @@ namespace C2B_FBR_Connect.Managers
         }
 
         // Updated UploadToFBR method
-        public async Task<bool> UploadToFBR(Invoice invoice, string token)
+        public async Task<FBRResponse> UploadToFBR(Invoice invoice, string token)
         {
+            var result = new FBRResponse();
+
             try
             {
                 if (_currentCompany == null)
@@ -62,33 +64,33 @@ namespace C2B_FBR_Connect.Managers
                 if (string.IsNullOrEmpty(_currentCompany.SellerNTN))
                     throw new InvalidOperationException("Seller NTN not configured. Please update company settings.");
 
-                // Get invoice details from QuickBooks
                 var details = _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
                 if (details == null)
                 {
-                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null,
-                        "Could not retrieve invoice details from QuickBooks");
-                    return false;
+                    result.Success = false;
+                    result.ErrorMessage = "Could not retrieve invoice details from QuickBooks";
+                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, result.ErrorMessage);
+                    return result;
                 }
 
-                // ✅ Inject company details into payload
+                // Add company details
                 details.SellerNTN = _currentCompany.SellerNTN;
                 details.SellerBusinessName = _currentCompany.CompanyName;
                 details.SellerProvince = _currentCompany.SellerProvince;
                 details.SellerAddress = _currentCompany.SellerAddress;
 
-                // ✅ Upload to FBR
+                // Call FBR API
                 var response = await _fbr.UploadInvoice(details, token);
+                result = response;
 
                 if (response.Success)
                 {
-                    // Update invoice with FBR response data
                     invoice.FBR_IRN = response.IRN;
-                    invoice.FBR_QRCode = response.IRN; // QR Code content is the IRN
+                    invoice.FBR_QRCode = response.IRN;
 
                     _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Uploaded", response.IRN, null);
 
-                    // ✅ Auto-generate PDF and save to Documents folder
+                    // Generate PDF
                     try
                     {
                         string outputPath = GetDefaultPDFPath(invoice);
@@ -97,37 +99,40 @@ namespace C2B_FBR_Connect.Managers
                     }
                     catch (Exception pdfEx)
                     {
-                        // Log PDF generation error but don't fail the upload
                         Console.WriteLine($"Warning: PDF generation failed: {pdfEx.Message}");
                     }
-
-                    return true;
                 }
                 else
                 {
                     _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, response.ErrorMessage);
-                    return false;
                 }
+
+                return result;
             }
             catch (Exception ex)
             {
-                _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null,
-                    $"Exception: {ex.Message}");
-                return false;
+                result.Success = false;
+                result.ErrorMessage = ex.Message;
+                _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, $"Exception: {ex.Message}");
+                return result;
             }
         }
 
+
         // ✅ Upload multiple invoices to FBR in batch
-        public async Task<Dictionary<string, bool>> UploadMultipleToFBR(List<Invoice> invoices, string token)
+        public async Task<Dictionary<string, FBRResponse>> UploadMultipleToFBR(List<Invoice> invoices, string token)
         {
-            var results = new Dictionary<string, bool>();
+            var results = new Dictionary<string, FBRResponse>();
+
             foreach (var invoice in invoices)
             {
-                var success = await UploadToFBR(invoice, token);
-                results[invoice.InvoiceNumber] = success;
+                var response = await UploadToFBR(invoice, token);
+                results[invoice.InvoiceNumber] = response;
             }
+
             return results;
         }
+
 
         // ✅ Generate a PDF for invoice
         public void GeneratePDF(Invoice invoice, string outputPath)
@@ -166,12 +171,15 @@ namespace C2B_FBR_Connect.Managers
 
             foreach (var invoice in failedInvoices)
             {
-                var success = await UploadToFBR(invoice, token);
-                if (success) successCount++;
+                var response = await UploadToFBR(invoice, token);
+
+                if (response.Success)
+                    successCount++;
             }
 
             return successCount;
         }
+
 
         // Add this helper method to InvoiceManager class
         private string GetDefaultPDFPath(Invoice invoice)

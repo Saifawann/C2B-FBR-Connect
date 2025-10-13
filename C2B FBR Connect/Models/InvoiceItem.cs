@@ -22,7 +22,7 @@ namespace C2B_FBR_Connect.Models
         // FBR-specific fields
         public string HSCode { get; set; }
         public string UnitOfMeasure { get; set; }
-        public string RetailPrice { get; set; }
+        public decimal RetailPrice { get; set; }
         public decimal ExtraTax { get; set; }
         public decimal FurtherTax { get; set; }
         public decimal FedPayable { get; set; }
@@ -30,15 +30,5 @@ namespace C2B_FBR_Connect.Models
         public decimal Discount { get; set; }
         public string SaleType { get; set; }
 
-        public InvoiceItem()
-        {
-            Quantity = 1;
-            UnitOfMeasure = "Unit";
-            ExtraTax = 0;
-            FurtherTax = 0;
-            FedPayable = 0;
-            SalesTaxWithheldAtSource = 0;
-            Discount = 0;
-        }
     }
 }

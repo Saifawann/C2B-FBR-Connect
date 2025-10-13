@@ -14,7 +14,7 @@ namespace C2B_FBR_Connect.Services
         private QBSessionManager _sessionManager;
         private bool _isConnected;
         private CompanyInfo _companyInfo;
-        private Company _companySettings; // Store company settings from database
+        private Company _companySettings;
 
         public string CurrentCompanyName { get; private set; }
         public string CurrentCompanyFile { get; private set; }
@@ -286,7 +286,7 @@ namespace C2B_FBR_Connect.Services
                                         TaxRate = displayTaxRate,
                                         SalesTaxAmount = standardTaxAmount,
                                         TotalValue = Convert.ToDecimal(lineAmount) + standardTaxAmount + furtherTax,
-                                        RetailPrice = retailPrice,
+                                        RetailPrice = decimal.TryParse(retailPrice, out var parsedRetailPrice) ? parsedRetailPrice : 0,
                                         ExtraTax = furtherTax,
                                         FurtherTax = 0
                                     };
@@ -589,27 +589,20 @@ namespace C2B_FBR_Connect.Services
         private string FormatAddress(IAddress address)
         {
             if (address == null) return "";
-
             try
             {
-                var addr = address as dynamic;
                 var lines = new List<string>();
 
                 // Add all address lines that have data
-                if (addr.Addr1 != null && !string.IsNullOrEmpty(addr.Addr1.GetValue()))
-                    lines.Add(addr.Addr1.GetValue());
-                if (addr.Addr2 != null && !string.IsNullOrEmpty(addr.Addr2.GetValue()))
-                    lines.Add(addr.Addr2.GetValue());
-                if (addr.Addr3 != null && !string.IsNullOrEmpty(addr.Addr3.GetValue()))
-                    lines.Add(addr.Addr3.GetValue());
-                if (addr.Addr4 != null && !string.IsNullOrEmpty(addr.Addr4.GetValue()))
-                    lines.Add(addr.Addr4.GetValue());
-                if (addr.Addr5 != null && !string.IsNullOrEmpty(addr.Addr5.GetValue()))
-                    lines.Add(addr.Addr5.GetValue());
-
-                // Add country if available
-                if (addr.Country != null && !string.IsNullOrEmpty(addr.Country.GetValue()))
-                    lines.Add(addr.Country.GetValue());
+                AddAddressLine(lines, address.Addr1);
+                AddAddressLine(lines, address.Addr2);
+                AddAddressLine(lines, address.Addr3);
+                AddAddressLine(lines, address.Addr4);
+                AddAddressLine(lines, address.Addr5);
+                AddAddressLine(lines, address.City);
+                AddAddressLine(lines, address.State);
+                AddAddressLine(lines, address.PostalCode);
+                AddAddressLine(lines, address.Country);
 
                 return string.Join(", ", lines);
             }
@@ -617,6 +610,18 @@ namespace C2B_FBR_Connect.Services
             {
                 System.Diagnostics.Debug.WriteLine($"FormatAddress error: {ex.Message}");
                 return "";
+            }
+        }
+
+        private void AddAddressLine(List<string> lines, IQBStringType addressField)
+        {
+            if (addressField != null)
+            {
+                var value = addressField.GetValue();
+                if (!string.IsNullOrEmpty(value))
+                {
+                    lines.Add(value.TrimEnd(',', ' '));
+                }
             }
         }
 

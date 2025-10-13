@@ -1,4 +1,5 @@
 ﻿using C2B_FBR_Connect.Models;
+using iText.Kernel.Geom;
 using Newtonsoft.Json;
 using System;
 using System.Linq;
@@ -22,111 +23,105 @@ namespace C2B_FBR_Connect.Services
         {
             try
             {
-                // ✅ Basic validation
-                if (string.IsNullOrEmpty(invoice.SellerNTN))
-                {
-                    return new FBRResponse
-                    {
-                        Success = false,
-                        ErrorMessage = "Seller NTN is required. Please configure it in Company Settings."
-                    };
-                }
+                var fbrBody = BuildFBRPayload(invoice);
 
-                // ✅ Map payload into FBR's expected format
-                var fbrBody = new
-                {
-                    invoiceType = invoice.InvoiceType,
-                    invoiceDate = invoice.InvoiceDate.ToString("yyyy-MM-dd"),
-                    invoiceRefNo = invoice.InvoiceNumber,
-                    scenarioId = "SN002", // default scenario
-                    sellerNTNCNIC = invoice.SellerNTN,
-                    sellerBusinessName = invoice.SellerBusinessName,
-                    sellerAddress = invoice.SellerAddress,
-                    sellerProvince = invoice.SellerProvince,
-                    buyerNTNCNIC = invoice.CustomerNTN,
-                    buyerBusinessName = invoice.CustomerName,
-                    buyerAddress = invoice.BuyerAddress,
-                    buyerProvince = invoice.BuyerProvince,
-                    buyerRegistrationType = invoice.BuyerRegistrationType,
-                    items = invoice.Items?.Select(item => new
-                    {
-                        hsCode = item.HSCode,
-                        productDescription = item.ItemName,
-                        rate = $"{item.TaxRate}%",
-                        uoM = item.UnitOfMeasure,
-                        quantity = item.Quantity,
-                        totalValues = item.TotalValue,
-                        valueSalesExcludingST = item.TotalPrice,
-                        fixedNotifiedValueOrRetailPrice = item.RetailPrice,
-                        salesTaxApplicable = item.SalesTaxAmount,
-                        extraTax = item.ExtraTax,
-                        furtherTax = item.FurtherTax,
-                        discount = item.Discount,
-                        fedPayable = item.FedPayable,
-                        salesTaxWithheldAtSource = item.SalesTaxWithheldAtSource,
-                        saleType = "Goods at standard rate (default)"
-                    }).ToList(),
-                    totalSalesValue = invoice.Subtotal,
-                    totalTaxCharged = invoice.TaxAmount,
-                    totalInvoiceValue = invoice.TotalAmount
-                };
-
+                // ✅ Log request JSON
                 var json = JsonConvert.SerializeObject(fbrBody, Formatting.Indented);
+                System.Diagnostics.Debug.WriteLine("=== FBR Request ===");
+                System.Diagnostics.Debug.WriteLine(json);
+
+                // ✅ Prepare request
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
-
                 _httpClient.DefaultRequestHeaders.Clear();
-                _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
+                _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken);
 
+                // ✅ Make API call
                 var response = await _httpClient.PostAsync($"{_baseUrl}postinvoicedata_sb", content);
                 var responseString = await response.Content.ReadAsStringAsync();
 
-                if (!response.IsSuccessStatusCode)
-                {
-                    return new FBRResponse
-                    {
-                        Success = false,
-                        ErrorMessage = $"HTTP {response.StatusCode}: {responseString}",
-                        ResponseData = responseString
-                    };
-                }
+                System.Diagnostics.Debug.WriteLine("=== FBR Response ===");
+                System.Diagnostics.Debug.WriteLine(responseString);
 
-                // ✅ Parse the correct FBR response structure
-                dynamic parsed = JsonConvert.DeserializeObject(responseString);
-
-                string invoiceNumber = parsed?.invoiceNumber ?? "";
-                string dated = parsed?.dated ?? "";
-                string statusCode = parsed?.validationResponse?.statusCode ?? "";
-                string status = parsed?.validationResponse?.status ?? "";
-                string error = parsed?.validationResponse?.error ?? "";
-
-                // Extract invoice number from the first item in invoiceStatuses array
+                // ✅ Safely parse JSON response
                 string fbrInvoiceNo = "";
-                if (parsed?.validationResponse?.invoiceStatuses != null &&
-                    parsed.validationResponse.invoiceStatuses.Count > 0)
+                string? errorMessage = null;
+
+                try
                 {
-                    fbrInvoiceNo = parsed.validationResponse.invoiceStatuses[0].invoiceNo ?? "";
+                    dynamic? parsed = JsonConvert.DeserializeObject(responseString);
+                    fbrInvoiceNo = parsed?.validationResponse?.invoiceStatuses?[0]?.invoiceNo?.ToString() ?? "";
+                    errorMessage = parsed?.validationResponse?.message?.ToString() ?? responseString;
+                }
+                catch
+                {
+                    // If JSON parsing fails, just keep the raw response
+                    errorMessage = responseString;
                 }
 
-                // Check if validation was successful
-                bool isSuccess = statusCode == "00" && status == "Valid";
-
+                // ✅ Return consistent FBRResponse
                 return new FBRResponse
                 {
-                    Success = isSuccess,
-                    IRN = fbrInvoiceNo, // This is the FBR-generated invoice number
-                    ErrorMessage = isSuccess ? "" : error,
+                    Success = response.IsSuccessStatusCode && !string.IsNullOrEmpty(fbrInvoiceNo),
+                    IRN = fbrInvoiceNo,
+                    ErrorMessage = errorMessage,
                     ResponseData = responseString
                 };
             }
             catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine("=== Exception ===");
+                System.Diagnostics.Debug.WriteLine(ex);
+
                 return new FBRResponse
                 {
                     Success = false,
-                    ErrorMessage = $"Exception: {ex.Message}",
+                    ErrorMessage = ex.Message,
                     ResponseData = ex.ToString()
                 };
             }
+        }
+
+        // ✅ Shared method to build FBR payload
+        public object BuildFBRPayload(FBRInvoicePayload invoice)
+        {
+            string scenarioId = invoice.BuyerRegistrationType?.Equals("Registered", StringComparison.OrdinalIgnoreCase) == true
+                ? "SN001" // Registered buyer
+                : "SN002"; // Unregistered buyer
+
+            return new
+            {
+                invoiceType = invoice.InvoiceType,
+                invoiceDate = invoice.InvoiceDate.ToString("yyyy-MM-dd"),
+                sellerNTNCNIC = invoice.SellerNTN,
+                sellerBusinessName = invoice.SellerBusinessName,
+                sellerProvince = invoice.SellerProvince,
+                sellerAddress = invoice.SellerAddress,
+                buyerNTNCNIC = invoice.CustomerNTN,
+                buyerBusinessName = invoice.CustomerName,
+                buyerProvince = invoice.BuyerProvince,
+                buyerAddress = invoice.BuyerAddress,
+                buyerRegistrationType = invoice.BuyerRegistrationType,
+                invoiceRefNo = invoice.InvoiceNumber,
+                scenarioId = scenarioId,
+                items = invoice.Items?.Select(item => new
+                {
+                    hsCode = item.HSCode,
+                    productDescription = item.ItemName,
+                    rate = item.TaxRate > 0 ? $"{item.TaxRate:N0}%" : "0%",
+                    uoM = item.UnitOfMeasure,
+                    quantity = item.Quantity,
+                    totalValues = item.TotalValue,
+                    valueSalesExcludingST = item.TotalPrice,
+                    fixedNotifiedValueOrRetailPrice = item.RetailPrice,
+                    salesTaxApplicable = item.SalesTaxAmount,
+                    extraTax = item.ExtraTax,
+                    furtherTax = item.FurtherTax,
+                    discount = 0.00,
+                    fedPayable = 0.00,
+                    salesTaxWithheldAtSource = 0.00,
+                    saleType = "Goods at standard rate (default)"
+                }).ToList()
+            };
         }
 
         public void Dispose()
