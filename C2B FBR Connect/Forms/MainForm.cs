@@ -48,7 +48,7 @@ namespace C2B_FBR_Connect.Forms
 
         private void SetupCustomUI()
         {
-            this.Text = "C2B FBR Connect - Digital Invoicing System";
+            this.Text = "C2B Smart App - Digital Invoicing System";
             this.Size = new Size(1400, 750);
             this.StartPosition = FormStartPosition.CenterScreen;
 
@@ -237,35 +237,52 @@ namespace C2B_FBR_Connect.Forms
             ConnectToQuickBooks();
         }
 
-        private void ConnectToQuickBooks()
+        private bool ConnectToQuickBooks()
         {
             try
             {
                 _currentCompany = null;
-
-                if (_qb.Connect())
+        
+                if (!_qb.Connect())
                 {
-                    lblCompanyName.Text = $"Connected: {_qb.CurrentCompanyName}";
-                    _currentCompany = _companyManager.GetCompany(_qb.CurrentCompanyName);
-
-                    if (_currentCompany == null)
-                    {
-                        MessageBox.Show("Company not configured. Please setup FBR token and seller information.",
-                            "Setup Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        ShowCompanySetup();
-                    }
-                    else
-                    {
-                        // Set company context in invoice manager
-                        _invoiceManager.SetCompany(_currentCompany);
-                        LoadInvoices();
-                    }
+                    var retryResult = MessageBox.Show(
+                        "Unable to connect to QuickBooks.\nWould you like to retry?",
+                        "Connection Failed",
+                        MessageBoxButtons.RetryCancel,
+                        MessageBoxIcon.Warning);
+            
+                    return retryResult == DialogResult.Retry ? ConnectToQuickBooks() : false;
                 }
+
+                lblCompanyName.Text = $"Connected: {_qb.CurrentCompanyName}";
+                _currentCompany = _companyManager.GetCompany(_qb.CurrentCompanyName);
+        
+                if (_currentCompany == null)
+                {
+                    MessageBox.Show(
+                        "Company not configured. Please setup FBR token and seller information.",
+                        "Setup Required",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    ShowCompanySetup();
+                }
+                else
+                {
+                    _invoiceManager.SetCompany(_currentCompany);
+                    LoadInvoices();
+                }
+        
+                return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"QuickBooks connection failed: {ex.Message}",
-                    "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                var retryResult = MessageBox.Show(
+                    $"QuickBooks connection failed:\n{ex.Message}\n\nWould you like to retry?",
+                    "Connection Error",
+                    MessageBoxButtons.RetryCancel,
+                    MessageBoxIcon.Error);
+        
+                return retryResult == DialogResult.Retry ? ConnectToQuickBooks() : false;
             }
         }
 
@@ -495,7 +512,6 @@ namespace C2B_FBR_Connect.Forms
                 var selectedInvoice = row.DataBoundItem as Invoice;
                 if (selectedInvoice != null && selectedInvoice.Status != "Uploaded")
                 {
-                    // ✅ Always reload from database to get latest data
                     var invoice = _db.GetInvoices(_currentCompany.CompanyName)
                                      .FirstOrDefault(i => i.Id == selectedInvoice.Id);
 
@@ -521,7 +537,6 @@ namespace C2B_FBR_Connect.Forms
                         {
                             failed++;
 
-                            // ✅ Get the updated invoice with error message from database
                             var updatedInvoice = _db.GetInvoices(_currentCompany.CompanyName)
                                 .FirstOrDefault(i => i.Id == invoice.Id);
 
@@ -531,7 +546,6 @@ namespace C2B_FBR_Connect.Forms
 
                             failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
 
-                            // ✅ Log to debug window
                             System.Diagnostics.Debug.WriteLine($"Failed to upload {invoice.InvoiceNumber}: {errorMsg}");
                         }
                     }
@@ -541,11 +555,9 @@ namespace C2B_FBR_Connect.Forms
                         string errorMsg = $"Exception: {ex.Message}";
                         failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
 
-                        // ✅ Log exception to debug window
                         System.Diagnostics.Debug.WriteLine($"Exception uploading {invoice.InvoiceNumber}: {ex.Message}");
                         System.Diagnostics.Debug.WriteLine(ex.StackTrace);
                     }
-
 
                     progressBar.Value++;
                 }
@@ -555,15 +567,16 @@ namespace C2B_FBR_Connect.Forms
             progressBar.Visible = false;
             statusLabel.Text = $"Upload complete: {uploaded} success, {failed} failed";
 
-            // ✅ Show detailed results
             if (failedInvoices.Count > 0)
             {
                 var resultForm = new Form
                 {
                     Text = "Upload Results",
-                    Size = new Size(900, 600),
+                    Width = 900,
+                    Height = 650,
                     StartPosition = FormStartPosition.CenterParent,
-                    FormBorderStyle = FormBorderStyle.Sizable
+                    FormBorderStyle = FormBorderStyle.Sizable,
+                    MinimumSize = new Size(700, 500)
                 };
 
                 var lblSummary = new Label
@@ -572,7 +585,8 @@ namespace C2B_FBR_Connect.Forms
                     Location = new Point(20, 20),
                     Size = new Size(850, 30),
                     Font = new Font("Arial", 12F, FontStyle.Bold),
-                    ForeColor = failed > 0 ? Color.DarkRed : Color.DarkGreen
+                    ForeColor = failed > 0 ? Color.DarkRed : Color.DarkGreen,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
                 };
 
                 var lblFailedTitle = new Label
@@ -581,7 +595,8 @@ namespace C2B_FBR_Connect.Forms
                     Location = new Point(20, 60),
                     Size = new Size(200, 20),
                     Font = new Font("Arial", 10F, FontStyle.Bold),
-                    ForeColor = Color.DarkRed
+                    ForeColor = Color.DarkRed,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left
                 };
 
                 var txtFailed = new TextBox
@@ -591,24 +606,26 @@ namespace C2B_FBR_Connect.Forms
                             $"Invoice: {f.InvoiceNumber}\n" +
                             $"Error:\n{f.Error}\n")),
                     Location = new Point(20, 85),
-                    Size = new Size(850, 450),
+                    Size = new Size(840, 450),
                     Multiline = true,
                     ReadOnly = true,
                     ScrollBars = ScrollBars.Vertical,
                     Font = new Font("Consolas", 9F),
                     BackColor = Color.FromArgb(255, 245, 245),
-                    ForeColor = Color.DarkRed
+                    ForeColor = Color.DarkRed,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
                 };
 
                 var btnCopyErrors = new Button
                 {
                     Text = "Copy Errors",
-                    Location = new Point(20, 545),
                     Size = new Size(120, 35),
                     BackColor = Color.FromArgb(33, 150, 243),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Anchor = AnchorStyles.Bottom | AnchorStyles.Left
                 };
+                btnCopyErrors.Location = new Point(20, resultForm.ClientSize.Height - 55);
                 btnCopyErrors.Click += (s, e) =>
                 {
                     Clipboard.SetText(txtFailed.Text);
@@ -619,12 +636,13 @@ namespace C2B_FBR_Connect.Forms
                 var btnClose = new Button
                 {
                     Text = "Close",
-                    Location = new Point(750, 545),
                     Size = new Size(120, 35),
                     BackColor = Color.FromArgb(96, 125, 139),
                     ForeColor = Color.White,
-                    FlatStyle = FlatStyle.Flat
+                    FlatStyle = FlatStyle.Flat,
+                    Anchor = AnchorStyles.Bottom | AnchorStyles.Right
                 };
+                btnClose.Location = new Point(resultForm.ClientSize.Width - 140, resultForm.ClientSize.Height - 55);
                 btnClose.Click += (s, e) => resultForm.Close();
 
                 resultForm.Controls.Add(lblSummary);

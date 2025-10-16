@@ -162,14 +162,29 @@ namespace C2B_FBR_Connect.Services
         {
             using var conn = new SQLiteConnection(_connectionString);
             conn.Open();
-
             var cmd = new SQLiteCommand(@"
-                INSERT OR REPLACE INTO Invoices 
-                (CompanyName, QuickBooksInvoiceId, InvoiceNumber, CustomerName, CustomerNTN,
-                 Amount, Status, FBR_IRN, UploadDate, ErrorMessage) 
-                VALUES 
-                (@company, @qbId, @invNo, @customer, @ntn, @amount, @status, 
-                 @irn, @upload, @error)", conn);
+        INSERT INTO Invoices 
+        (CompanyName, QuickBooksInvoiceId, InvoiceNumber, CustomerName, CustomerNTN,
+         Amount, Status, FBR_IRN, UploadDate, ErrorMessage) 
+        VALUES 
+        (@company, @qbId, @invNo, @customer, @ntn, @amount, @status, 
+         @irn, @upload, @error)
+        ON CONFLICT(CompanyName, QuickBooksInvoiceId) 
+        DO UPDATE SET
+            InvoiceNumber = @invNo,
+            CustomerName = @customer,
+            CustomerNTN = @ntn,
+            Amount = @amount,
+            Status = CASE 
+                WHEN Status IN ('Uploaded', 'Failed') THEN Status 
+                ELSE @status 
+            END,
+            FBR_IRN = CASE WHEN FBR_IRN IS NOT NULL THEN FBR_IRN ELSE @irn END,
+            UploadDate = CASE WHEN UploadDate IS NOT NULL THEN UploadDate ELSE @upload END,
+            ErrorMessage = CASE 
+                WHEN Status = 'Failed' THEN ErrorMessage 
+                ELSE @error 
+            END", conn);
 
             cmd.Parameters.AddWithValue("@company", invoice.CompanyName);
             cmd.Parameters.AddWithValue("@qbId", invoice.QuickBooksInvoiceId);

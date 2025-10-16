@@ -19,13 +19,13 @@ namespace C2B_FBR_Connect.Services
 {
     public class PDFService
     {
-        private readonly PdfFont _boldFont;
-        private readonly PdfFont _normalFont;
+        // ❌ Remove these class-level font variables
+        // private readonly PdfFont _boldFont;
+        // private readonly PdfFont _normalFont;
 
         public PDFService()
         {
-            _boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
-            _normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+            // ❌ Remove font initialization from constructor
         }
 
         public void GenerateInvoicePDF(Invoice invoice, FBRInvoicePayload details, string outputPath)
@@ -38,7 +38,12 @@ namespace C2B_FBR_Connect.Services
             using (var document = new Document(pdfDoc))
             {
                 document.SetMargins(30, 30, 40, 30);
-                BuildPDFContent(document, invoice, details);
+
+                // ✅ Create fonts fresh for each document
+                var boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
+                var normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+
+                BuildPDFContent(document, invoice, details, boldFont, normalFont);
             }
         }
 
@@ -56,28 +61,29 @@ namespace C2B_FBR_Connect.Services
                 Directory.CreateDirectory(dir);
         }
 
-        // 🔹 Core Layout Builder
-        private void BuildPDFContent(Document doc, Invoice invoice, FBRInvoicePayload details)
+        // 🔹 Core Layout Builder - Updated signature
+        private void BuildPDFContent(Document doc, Invoice invoice, FBRInvoicePayload details,
+            PdfFont boldFont, PdfFont normalFont)
         {
-            AddHeaderSection(doc, details);
-            AddInvoiceTitle(doc);
-            AddCustomerAndPaymentSection(doc, invoice, details);
-            AddItemsSection(doc, details);
-            AddAmountInWords(doc, details);
-            AddTotalsSection(doc, details);
-            AddFBRSection(doc, invoice);
-            AddFooter(doc);
+            AddHeaderSection(doc, details, boldFont, normalFont);
+            AddInvoiceTitle(doc, boldFont);
+            AddCustomerAndPaymentSection(doc, invoice, details, boldFont, normalFont);
+            AddItemsSection(doc, details, boldFont, normalFont);
+            AddAmountInWords(doc, details, boldFont);
+            AddTotalsSection(doc, details, boldFont, normalFont);
+            AddFBRSection(doc, invoice, boldFont, normalFont);
+            AddFooter(doc, boldFont);
         }
 
         #region Header
-        private void AddHeaderSection(Document doc, FBRInvoicePayload details)
+        private void AddHeaderSection(Document doc, FBRInvoicePayload details, PdfFont boldFont, PdfFont normalFont)
         {
             Table header = new Table(UnitValue.CreatePercentArray(new float[] { 2, 1 }))
                 .UseAllAvailableWidth();
 
             // Left: Company Info
             var companyInfo = new Paragraph(details.SellerBusinessName ?? "N/A")
-                .SetFont(_boldFont).SetFontSize(12).SetMarginBottom(2);
+                .SetFont(boldFont).SetFontSize(12).SetMarginBottom(2);
             companyInfo.Add("\n" + (details.SellerAddress ?? ""))
                         .Add("\nContact: " + (""))
                         .Add("\nEmail: " + (""));
@@ -86,7 +92,7 @@ namespace C2B_FBR_Connect.Services
 
             // Right: Tax Info
             var taxInfo = new Paragraph($"NTN: {details.SellerNTN ?? "N/A"}")
-                .SetFont(_normalFont).SetFontSize(10);
+                .SetFont(normalFont).SetFontSize(10);
             taxInfo.Add("\nSTRN: " + ("N/A"))
                    .Add("\nPOS ID: " + ("N/A"));
             header.AddCell(new Cell().Add(taxInfo)
@@ -97,10 +103,10 @@ namespace C2B_FBR_Connect.Services
             doc.Add(new Paragraph("\n"));
         }
 
-        private void AddInvoiceTitle(Document doc)
+        private void AddInvoiceTitle(Document doc, PdfFont boldFont)
         {
             var title = new Paragraph("SALES TAX INVOICE")
-                .SetFont(_boldFont)
+                .SetFont(boldFont)
                 .SetFontSize(16)
                 .SetTextAlignment(TextAlignment.CENTER)
                 .SetMarginBottom(10);
@@ -109,7 +115,8 @@ namespace C2B_FBR_Connect.Services
         #endregion
 
         #region Customer + Payment
-        private void AddCustomerAndPaymentSection(Document doc, Invoice invoice, FBRInvoicePayload details)
+        private void AddCustomerAndPaymentSection(Document doc, Invoice invoice, FBRInvoicePayload details,
+            PdfFont boldFont, PdfFont normalFont)
         {
             Table info = new Table(UnitValue.CreatePercentArray(new float[] { 1, 1 }))
                 .UseAllAvailableWidth()
@@ -117,7 +124,7 @@ namespace C2B_FBR_Connect.Services
 
             // Left: Customer Info
             var customer = new Paragraph("To: M/s " + (invoice.CustomerName ?? "N/A"))
-                .SetFont(_boldFont).SetFontSize(10);
+                .SetFont(boldFont).SetFontSize(10);
             customer.Add("\nAddress: " + (""))
                     .Add("\nPhone: " + (""));
             info.AddCell(new Cell().Add(customer).SetPadding(8)
@@ -125,7 +132,7 @@ namespace C2B_FBR_Connect.Services
 
             // Right: Payment Terms
             var payment = new Paragraph("Terms of Payment")
-                .SetFont(_boldFont).SetFontSize(10);
+                .SetFont(boldFont).SetFontSize(10);
             payment.Add("\nInvoice #: " + (invoice.InvoiceNumber ?? "N/A"))
                    .Add("\nDate: " + details.InvoiceDate.ToString("dd-MMM-yyyy"))
                    .Add("\nPayment Mode: " + ("Cash"));
@@ -137,11 +144,11 @@ namespace C2B_FBR_Connect.Services
         #endregion
 
         #region Items Table
-        private void AddItemsSection(Document doc, FBRInvoicePayload details)
+        private void AddItemsSection(Document doc, FBRInvoicePayload details, PdfFont boldFont, PdfFont normalFont)
         {
             if (details.Items == null || details.Items.Count == 0)
             {
-                doc.Add(new Paragraph("No items to display").SetFont(_normalFont).SetFontSize(10));
+                doc.Add(new Paragraph("No items to display").SetFont(normalFont).SetFontSize(10));
                 return;
             }
 
@@ -152,7 +159,7 @@ namespace C2B_FBR_Connect.Services
 
             string[] headers = { "S#", "Description", "HS Code", "Qty", "Rate", "Amount", "Discount", "Net Amt" };
             foreach (var h in headers)
-                table.AddHeaderCell(new Cell().Add(new Paragraph(h).SetFont(_boldFont).SetFontSize(9))
+                table.AddHeaderCell(new Cell().Add(new Paragraph(h).SetFont(boldFont).SetFontSize(9))
                     .SetBackgroundColor(new DeviceRgb(230, 230, 230))
                     .SetTextAlignment(TextAlignment.CENTER)
                     .SetPadding(5));
@@ -160,34 +167,34 @@ namespace C2B_FBR_Connect.Services
             int index = 1;
             foreach (var item in details.Items)
             {
-                table.AddCell(CreateItemCell(index.ToString(), TextAlignment.CENTER));
-                table.AddCell(CreateItemCell(item.ItemName ?? "", TextAlignment.LEFT));
-                table.AddCell(CreateItemCell(item.HSCode ?? "-", TextAlignment.CENTER));
-                table.AddCell(CreateItemCell(item.Quantity.ToString("N2"), TextAlignment.CENTER));
-                table.AddCell(CreateItemCell($"Rs. {item.UnitPrice:N2}", TextAlignment.RIGHT));
-                table.AddCell(CreateItemCell($"Rs. {item.TotalPrice:N2}", TextAlignment.RIGHT));
-                table.AddCell(CreateItemCell($"Rs. {item.Discount:N2}", TextAlignment.RIGHT));
-                table.AddCell(CreateItemCell($"Rs. {(item.TotalPrice - item.Discount):N2}", TextAlignment.RIGHT));
+                table.AddCell(CreateItemCell(index.ToString(), TextAlignment.CENTER, normalFont));
+                table.AddCell(CreateItemCell(item.ItemName ?? "", TextAlignment.LEFT, normalFont));
+                table.AddCell(CreateItemCell(item.HSCode ?? "-", TextAlignment.CENTER, normalFont));
+                table.AddCell(CreateItemCell(item.Quantity.ToString("N2"), TextAlignment.CENTER, normalFont));
+                table.AddCell(CreateItemCell($"Rs. {item.UnitPrice:N2}", TextAlignment.RIGHT, normalFont));
+                table.AddCell(CreateItemCell($"Rs. {item.TotalPrice:N2}", TextAlignment.RIGHT, normalFont));
+                table.AddCell(CreateItemCell($"Rs. {item.Discount:N2}", TextAlignment.RIGHT, normalFont));
+                table.AddCell(CreateItemCell($"Rs. {(item.TotalPrice - item.Discount):N2}", TextAlignment.RIGHT, normalFont));
                 index++;
             }
 
             doc.Add(table);
         }
 
-        private Cell CreateItemCell(string text, TextAlignment align)
+        private Cell CreateItemCell(string text, TextAlignment align, PdfFont normalFont)
         {
-            return new Cell().Add(new Paragraph(text).SetFont(_normalFont).SetFontSize(9))
+            return new Cell().Add(new Paragraph(text).SetFont(normalFont).SetFontSize(9))
                 .SetTextAlignment(align).SetPadding(5);
         }
         #endregion
 
         #region Amount in Words
-        private void AddAmountInWords(Document doc, FBRInvoicePayload details)
+        private void AddAmountInWords(Document doc, FBRInvoicePayload details, PdfFont boldFont)
         {
             var total = details.TotalAmount + details.TaxAmount;
             string words = NumberToWords((long)Math.Round(total));
             var para = new Paragraph("Amount in Words: " + words + " Rupees Only")
-                .SetFont(_boldFont)
+                .SetFont(boldFont)
                 .SetFontSize(9)
                 .SetMarginTop(10);
             doc.Add(para);
@@ -235,30 +242,30 @@ namespace C2B_FBR_Connect.Services
         #endregion
 
         #region Totals Section
-        private void AddTotalsSection(Document doc, FBRInvoicePayload details)
+        private void AddTotalsSection(Document doc, FBRInvoicePayload details, PdfFont boldFont, PdfFont normalFont)
         {
             var table = new Table(UnitValue.CreatePercentArray(new float[] { 1, 1 }))
                 .SetWidth(UnitValue.CreatePercentValue(40))
                 .SetHorizontalAlignment(iText.Layout.Properties.HorizontalAlignment.RIGHT)
                 .SetMarginTop(10);
 
-            AddTotalRow(table, "Gross Total", $"Rs. {details.TotalAmount:N2}");
-            AddTotalRow(table, "Discount", $"Rs. ");
-            AddTotalRow(table, "Sales Tax", $"Rs. {details.TaxAmount:N2}");
+            AddTotalRow(table, "Gross Total", $"Rs. {details.TotalAmount:N2}", boldFont, normalFont);
+            AddTotalRow(table, "Discount", $"Rs. ", boldFont, normalFont);
+            AddTotalRow(table, "Sales Tax", $"Rs. {details.TaxAmount:N2}", boldFont, normalFont);
 
             var total = details.TotalAmount + details.TaxAmount;
-            AddTotalRow(table, "Total (Incl. Tax)", $"Rs. {total:N2}", true);
+            AddTotalRow(table, "Total (Incl. Tax)", $"Rs. {total:N2}", boldFont, normalFont, true);
 
             doc.Add(table);
         }
 
-        private void AddTotalRow(Table table, string label, string value, bool bold = false)
+        private void AddTotalRow(Table table, string label, string value, PdfFont boldFont, PdfFont normalFont, bool bold = false)
         {
-            table.AddCell(new Cell().Add(new Paragraph(label).SetFont(bold ? _boldFont : _normalFont).SetFontSize(9))
+            table.AddCell(new Cell().Add(new Paragraph(label).SetFont(bold ? boldFont : normalFont).SetFontSize(9))
                 .SetBorder(Border.NO_BORDER)
                 .SetTextAlignment(TextAlignment.LEFT)
                 .SetPadding(3));
-            table.AddCell(new Cell().Add(new Paragraph(value).SetFont(bold ? _boldFont : _normalFont).SetFontSize(9))
+            table.AddCell(new Cell().Add(new Paragraph(value).SetFont(bold ? boldFont : normalFont).SetFontSize(9))
                 .SetBorder(Border.NO_BORDER)
                 .SetTextAlignment(TextAlignment.RIGHT)
                 .SetPadding(3));
@@ -266,7 +273,7 @@ namespace C2B_FBR_Connect.Services
         #endregion
 
         #region FBR Section
-        private void AddFBRSection(Document doc, Invoice invoice)
+        private void AddFBRSection(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
         {
             doc.Add(new Paragraph("\n"));
 
@@ -283,16 +290,16 @@ namespace C2B_FBR_Connect.Services
             }
             else
             {
-                fbr.AddCell(new Cell().Add(new Paragraph("[FBR Logo Missing]").SetFont(_normalFont).SetFontSize(8))
+                fbr.AddCell(new Cell().Add(new Paragraph("[FBR Logo Missing]").SetFont(normalFont).SetFontSize(8))
                     .SetBorder(Border.NO_BORDER));
             }
 
             // Center: IRN
             var irnCell = new Cell().SetBorder(Border.NO_BORDER).SetTextAlignment(TextAlignment.CENTER);
             irnCell.Add(new Paragraph("FBR INVOICE REFERENCE NUMBER")
-                .SetFont(_boldFont).SetFontSize(9));
+                .SetFont(boldFont).SetFontSize(9));
             irnCell.Add(new Paragraph(invoice.FBR_IRN ?? "N/A")
-                .SetFont(_normalFont).SetFontSize(9));
+                .SetFont(normalFont).SetFontSize(9));
             fbr.AddCell(irnCell);
 
             // Right: QR Code
@@ -306,7 +313,7 @@ namespace C2B_FBR_Connect.Services
             }
             else
             {
-                fbr.AddCell(new Cell().Add(new Paragraph("QR Not Available").SetFont(_normalFont).SetFontSize(8))
+                fbr.AddCell(new Cell().Add(new Paragraph("QR Not Available").SetFont(normalFont).SetFontSize(8))
                     .SetBorder(Border.NO_BORDER)
                     .SetTextAlignment(TextAlignment.RIGHT));
             }
@@ -327,11 +334,11 @@ namespace C2B_FBR_Connect.Services
         #endregion
 
         #region Footer
-        private void AddFooter(Document doc)
+        private void AddFooter(Document doc, PdfFont boldFont)
         {
             doc.Add(new Paragraph("\n"));
-            doc.Add(new Paragraph("Powered by C2B FBR Connect")
-                .SetFont(_boldFont)
+            doc.Add(new Paragraph("Powered by C2B Smart App")
+                .SetFont(boldFont)
                 .SetFontSize(9)
                 .SetTextAlignment(TextAlignment.CENTER)
                 .SetFontColor(ColorConstants.GRAY)

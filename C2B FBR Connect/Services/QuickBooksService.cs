@@ -26,7 +26,7 @@ namespace C2B_FBR_Connect.Services
                 _companySettings = companySettings;
 
                 _sessionManager = new QBSessionManager();
-                _sessionManager.OpenConnection("", "FBR Digital Invoicing App");
+                _sessionManager.OpenConnection("", "C2B Smart App");
                 _sessionManager.BeginSession("", ENOpenMode.omDontCare);
 
                 // Get company info
@@ -785,19 +785,63 @@ namespace C2B_FBR_Connect.Services
             return priceLevels;
         }
 
-
-        public void Dispose()
+        public void CloseSession()
         {
             if (_sessionManager != null && _isConnected)
             {
                 try
                 {
                     _sessionManager.EndSession();
-                    _sessionManager.CloseConnection();
+                    _isConnected = false;
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error ending session: {ex.Message}");
+                }
             }
         }
+
+        public void CloseConnection()
+        {
+            if (_sessionManager != null)
+            {
+                try
+                {
+                    _sessionManager.CloseConnection();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Error closing connection: {ex.Message}");
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            try
+            {
+                CloseSession();
+                CloseConnection();
+            }
+            finally
+            {
+                if (_sessionManager != null)
+                {
+                    try
+                    {
+                        System.Runtime.InteropServices.Marshal.FinalReleaseComObject(_sessionManager);
+                    }
+                    catch { }
+
+                    _sessionManager = null;
+                }
+
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+        }
+
     }
 
     // Helper classes to store data
