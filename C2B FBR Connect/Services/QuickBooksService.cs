@@ -1,10 +1,11 @@
-﻿using C2B_FBR_Connect.Models;
+﻿using C2B_FBR_Connect.Managers;
+using C2B_FBR_Connect.Models;
 using Microsoft.VisualBasic;
+using QBFC16Lib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using QBFC16Lib;
 using System.Threading.Tasks;
 
 namespace C2B_FBR_Connect.Services
@@ -15,6 +16,8 @@ namespace C2B_FBR_Connect.Services
         private bool _isConnected;
         private CompanyInfo _companyInfo;
         private Company _companySettings;
+        private CompanyManager _companyManager;
+        private FBRApiService _fbr;
 
         public string CurrentCompanyName { get; private set; }
         public string CurrentCompanyFile { get; private set; }
@@ -79,9 +82,6 @@ namespace C2B_FBR_Connect.Services
                 System.Diagnostics.Debug.WriteLine($"Warning: Could not fetch company information: {ex.Message}");
             }
         }
-
-
-
 
         /// Gets the current QuickBooks company information
         /// <returns>Company information including address and city</returns>
@@ -149,8 +149,9 @@ namespace C2B_FBR_Connect.Services
             return invoices;
         }
 
-        public FBRInvoicePayload GetInvoiceDetails(string qbInvoiceId)
+        public async Task<FBRInvoicePayload> GetInvoiceDetails(string qbInvoiceId)
         {
+            _fbr = new FBRApiService();
             if (!_isConnected) Connect();
 
             try
@@ -280,7 +281,7 @@ namespace C2B_FBR_Connect.Services
                                         ItemName = line.Desc?.GetValue() ?? "",
                                         HSCode = hsCode,
                                         Quantity = Convert.ToInt32(line.Quantity?.GetValue() ?? 1),
-                                        UnitOfMeasure = line.UnitOfMeasure?.GetValue() ?? "",
+                                        UnitOfMeasure = await _fbr.GetUOMDescriptionAsync(hsCode, _companySettings.FBRToken) ?? line.UnitOfMeasure?.GetValue(),
                                         UnitPrice = Convert.ToDecimal(line.Amount?.GetValue() ?? 0),
                                         TotalPrice = Convert.ToDecimal(lineAmount),
                                         TaxRate = displayTaxRate,
@@ -660,101 +661,67 @@ namespace C2B_FBR_Connect.Services
                     };
 
                     level.Items = new List<PriceLevelItem>();
-                    level.FixedPercentage = 0; // Add this property to your PriceLevel class
+                    level.FixedPercentage = 0;
 
-                    object orPriceLevelObj = priceLevel.ORPriceLevelRet;
-                    if (orPriceLevelObj != null)
+                    // Access ORPriceLevelRet
+                    IORPriceLevelRet orPriceLevel = priceLevel.ORPriceLevelRet;
+                    if (orPriceLevel != null)
                     {
-                        var type = orPriceLevelObj.GetType();
+                        // Check the type using ortype enum
+                        ENORPriceLevelRet priceType = orPriceLevel.ortype;
 
-                        // 🧩 Handle Per-Item Price Levels
-                        var perItemProp = type.GetProperty("PriceLevelPerItemRetList");
-                        if (perItemProp != null)
+                        if (priceType == ENORPriceLevelRet.orplrPriceLevelFixedPercentage)
                         {
-                            var itemList = perItemProp.GetValue(orPriceLevelObj);
-                            if (itemList != null)
+                            // Handle Fixed Percentage
+                            IQBPercentType fixedPct = orPriceLevel.PriceLevelFixedPercentage;
+                            if (fixedPct != null)
                             {
-                                int count = (int)itemList.GetType().GetProperty("Count").GetValue(itemList);
-                                for (int j = 0; j < count; j++)
-                                {
-                                    var itemPrice = itemList.GetType().GetMethod("GetAt").Invoke(itemList, new object[] { j });
-
-                                    string itemListID = null;
-                                    string itemFullName = null;
-                                    decimal customPrice = 0;
-                                    double customPricePercent = 0;
-
-                                    try
-                                    {
-                                        var itemRefProp = itemPrice.GetType().GetProperty("ItemRef");
-                                        var itemRef = itemRefProp?.GetValue(itemPrice);
-                                        if (itemRef != null)
-                                        {
-                                            var listIDObj = itemRef.GetType().GetProperty("ListID")?.GetValue(itemRef);
-                                            if (listIDObj != null)
-                                            {
-                                                var valMethod = listIDObj.GetType().GetMethod("GetValue");
-                                                if (valMethod != null)
-                                                    itemListID = valMethod.Invoke(listIDObj, null)?.ToString();
-                                            }
-
-                                            var fullNameObj = itemRef.GetType().GetProperty("FullName")?.GetValue(itemRef);
-                                            if (fullNameObj != null)
-                                            {
-                                                var valMethod = fullNameObj.GetType().GetMethod("GetValue");
-                                                if (valMethod != null)
-                                                    itemFullName = valMethod.Invoke(fullNameObj, null)?.ToString();
-                                            }
-                                        }
-
-                                        // Extract price fields
-                                        var customPriceObj = itemPrice.GetType().GetProperty("CustomPrice")?.GetValue(itemPrice);
-                                        if (customPriceObj != null)
-                                        {
-                                            var valMethod = customPriceObj.GetType().GetMethod("GetValue");
-                                            if (valMethod != null)
-                                                customPrice = Convert.ToDecimal(valMethod.Invoke(customPriceObj, null));
-                                        }
-
-                                        var customPercentObj = itemPrice.GetType().GetProperty("CustomPricePercent")?.GetValue(itemPrice);
-                                        if (customPercentObj != null)
-                                        {
-                                            var valMethod = customPercentObj.GetType().GetMethod("GetValue");
-                                            if (valMethod != null)
-                                                customPricePercent = Convert.ToDouble(valMethod.Invoke(customPercentObj, null));
-                                        }
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        System.Diagnostics.Debug.WriteLine($"Error reading price level item: {ex.Message}");
-                                    }
-
-                                    level.Items.Add(new PriceLevelItem
-                                    {
-                                        ItemListID = itemListID,
-                                        ItemFullName = itemFullName,
-                                        CustomPrice = customPrice,
-                                        CustomPricePercent = customPricePercent
-                                    });
-                                }
+                                level.FixedPercentage = fixedPct.GetValue();
+                                System.Diagnostics.Debug.WriteLine($"✅ Fixed percentage level '{level.Name}': {level.FixedPercentage}%");
                             }
                         }
-
-                        // 🧩 Handle Fixed Percentage Price Levels (NEW - This is what you're missing)
-                        var fixedPctProp = type.GetProperty("PriceLevelFixedPercentage");
-                        if (fixedPctProp != null)
+                        else if (priceType == ENORPriceLevelRet.orplrPriceLevelPerItemRetCurrency)
                         {
-                            var fixedPctObj = fixedPctProp.GetValue(orPriceLevelObj);
-                            if (fixedPctObj != null)
+                            // Handle Per-Item pricing - THIS IS THE KEY FIX
+                            IPriceLevelPerItemRetCurrency perItemCurrency = orPriceLevel.PriceLevelPerItemRetCurrency;
+
+                            if (perItemCurrency != null)
                             {
-                                var pctValueProp = fixedPctObj.GetType().GetProperty("Value");
-                                if (pctValueProp != null)
+                                IPriceLevelPerItemRetList itemList = perItemCurrency.PriceLevelPerItemRetList;
+
+                                if (itemList != null)
                                 {
-                                    var pctVal = pctValueProp.GetValue(fixedPctObj);
-                                    if (pctVal != null)
+                                    for (int j = 0; j < itemList.Count; j++)
                                     {
-                                        level.FixedPercentage = Convert.ToDouble(pctVal);
-                                        System.Diagnostics.Debug.WriteLine($"✅ Fixed percentage level '{level.Name}': {level.FixedPercentage}%");
+                                        IPriceLevelPerItemRet itemPrice = itemList.GetAt(j);
+
+                                        string itemListID = itemPrice.ItemRef?.ListID?.GetValue();
+                                        string itemFullName = itemPrice.ItemRef?.FullName?.GetValue();
+
+                                        decimal customPrice = 0;
+                                        double customPricePercent = 0;
+
+                                        // Access ORORCustomPrice
+                                        IORORCustomPrice customPriceObj = itemPrice.ORORCustomPrice;
+                                        if (customPriceObj != null)
+                                        {
+                                            if (customPriceObj.CustomPrice != null)
+                                            {
+                                                customPrice = Convert.ToDecimal(customPriceObj.CustomPrice.GetValue());
+                                            }
+                                            else if (customPriceObj.CustomPricePercent != null)
+                                            {
+                                                customPricePercent = customPriceObj.CustomPricePercent.GetValue();
+                                            }
+                                        }
+
+                                        level.Items.Add(new PriceLevelItem
+                                        {
+                                            ItemListID = itemListID,
+                                            ItemFullName = itemFullName,
+                                            CustomPrice = customPrice,
+                                            CustomPricePercent = customPricePercent
+                                        });
                                     }
                                 }
                             }

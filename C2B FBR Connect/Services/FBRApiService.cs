@@ -5,6 +5,7 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 
 namespace C2B_FBR_Connect.Services
@@ -117,6 +118,57 @@ namespace C2B_FBR_Connect.Services
                     ResponseData = ex.ToString()
                 };
             }
+        }
+
+        public async Task<string> GetUOMDescriptionAsync(string hsCode, string authToken)
+        {
+            if (string.IsNullOrWhiteSpace(authToken))
+                return "Error: Missing authentication token";
+
+            string url = $"https://gw.fbr.gov.pk/pdi/v2/HS_UOM?hs_code={hsCode}&annexure_id=3";
+
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    return $"Error: {response.StatusCode} - {response.ReasonPhrase}\n{json}";
+                }
+
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var items = System.Text.Json.JsonSerializer.Deserialize<List<FbrUomItem>>(json, options);
+
+                if (items != null && items.Any())
+                    return items.First().Description;
+
+                return "Description not found";
+            }
+            catch (HttpRequestException ex)
+            {
+                return $"Network error: {ex.Message}";
+            }
+            catch (Exception ex)
+            {
+                return $"Error: {ex.Message}";
+            }
+        }
+
+
+        private class FbrUomItem
+        {
+            public int UoM_ID { get; set; }
+            public string Description { get; set; } = string.Empty;
         }
 
         private FBRResponse ParseFBRResponse(string responseString)
@@ -237,7 +289,7 @@ namespace C2B_FBR_Connect.Services
                     ResponseData = responseString
                 };
             }
-            catch (JsonException ex)
+            catch (Newtonsoft.Json.JsonException ex)
             {
                 System.Diagnostics.Debug.WriteLine($"❌ JSON parsing error: {ex.Message}");
                 return new FBRResponse

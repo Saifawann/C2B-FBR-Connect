@@ -64,7 +64,7 @@ namespace C2B_FBR_Connect.Managers
                 if (string.IsNullOrEmpty(_currentCompany.SellerNTN))
                     throw new InvalidOperationException("Seller NTN not configured. Please update company settings.");
 
-                var details = _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
+                var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
                 if (details == null)
                 {
                     result.Success = false;
@@ -135,11 +135,11 @@ namespace C2B_FBR_Connect.Managers
 
 
         // ✅ Generate a PDF for invoice
-        public void GeneratePDF(Invoice invoice, string outputPath)
+        public async void GeneratePDF(Invoice invoice, string outputPath)
         {
             try
             {
-                var details = _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
+                var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
                 if (details == null)
                     throw new Exception("Could not retrieve invoice details from QuickBooks");
 

@@ -660,7 +660,7 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-        private void ShowInvoiceDetails(Invoice invoice)
+        private async void ShowInvoiceDetails(Invoice invoice)
         {
             try
             {
@@ -681,7 +681,7 @@ namespace C2B_FBR_Connect.Forms
                 }
 
                 // Fetch full invoice details from QuickBooks
-                var details = _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
+                var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
 
                 if (details == null)
                 {
