@@ -41,6 +41,7 @@ namespace C2B_FBR_Connect.Services
             catch (Exception ex)
             {
                 _isConnected = false;
+                System.Diagnostics.Debug.WriteLine($"QuickBooks connection error: {ex.Message}");
                 throw new Exception($"QuickBooks connection failed: {ex.Message}", ex);
             }
         }
@@ -69,8 +70,8 @@ namespace C2B_FBR_Connect.Services
                         State = company.LegalAddress?.State?.GetValue(),
                         PostalCode = company.LegalAddress?.PostalCode?.GetValue(),
                         Country = company.LegalAddress?.Country?.GetValue(),
-                        Phone = company.Email?.GetValue(),
-                        Email = company.Phone?.GetValue()
+                        Phone = company.Phone?.GetValue(),
+                        Email = company.Email?.GetValue()
                     };
 
                     CurrentCompanyName = _companyInfo.Name;
@@ -198,6 +199,7 @@ namespace C2B_FBR_Connect.Services
                             BuyerProvince = customerData.State,
                             BuyerAddress = customerData.Address,
                             BuyerRegistrationType = customerData.CustomerType,
+                            BuyerPhone = customerData.Phone,
 
                             // Financial Summary
                             TotalAmount = Convert.ToDecimal((inv.Subtotal?.GetValue() ?? 0) + (inv.SalesTaxTotal?.GetValue() ?? 0)),
@@ -367,7 +369,8 @@ namespace C2B_FBR_Connect.Services
                         customerData.Address = FormatAddress(customer.BillAddress);
 
                         // Get customer type from QuickBooks
-                        customerData.CustomerType = customer.CustomerTypeRef?.FullName?.GetValue() ?? "UnRegistered";
+                        customerData.CustomerType = customer.CustomerTypeRef?.FullName?.GetValue() ?? "Unregistered";
+                        customerData.Phone = customer.Phone?.GetValue() ?? "N/A";
 
                         // Read custom fields (NTN and Province)
                         if (customer.DataExtRetList != null && customer.DataExtRetList.Count > 0)
@@ -831,6 +834,7 @@ namespace C2B_FBR_Connect.Services
         public string CustomerType { get; set; } = "";
         public string Address { get; set; } = "";
         public string State { get; set; } = "";
+        public string Phone { get; set; } = "";
     }
 
     internal class ItemData

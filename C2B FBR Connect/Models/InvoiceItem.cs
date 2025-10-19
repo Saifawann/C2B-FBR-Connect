@@ -6,13 +6,20 @@ using System.Threading.Tasks;
 
 namespace C2B_FBR_Connect.Models
 {
+
     public class InvoiceItem
     {
+        // Database fields
+        public int Id { get; set; }
+        public int InvoiceId { get; set; }
+
         // Basic item details
         public string ItemName { get; set; }
+        public string ItemDescription { get; set; }
         public int Quantity { get; set; }
         public decimal UnitPrice { get; set; }
         public decimal TotalPrice { get; set; }
+        public decimal NetAmount { get; set; }
 
         // Tax details
         public decimal TaxRate { get; set; }
@@ -29,6 +36,6 @@ namespace C2B_FBR_Connect.Models
         public decimal SalesTaxWithheldAtSource { get; set; }
         public decimal Discount { get; set; }
         public string SaleType { get; set; }
-
     }
+
 }

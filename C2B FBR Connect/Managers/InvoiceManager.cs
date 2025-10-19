@@ -2,6 +2,7 @@
 using C2B_FBR_Connect.Services;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 
@@ -24,13 +25,11 @@ namespace C2B_FBR_Connect.Managers
             _pdf = pdf;
         }
 
-        // ✅ Sets the current company context for operations
         public void SetCompany(Company company)
         {
             _currentCompany = company;
         }
 
-        // ✅ Fetch invoices from QuickBooks and save to DB
         public List<Invoice> FetchFromQuickBooks()
         {
             try
@@ -51,7 +50,6 @@ namespace C2B_FBR_Connect.Managers
             }
         }
 
-        // Updated UploadToFBR method
         public async Task<FBRResponse> UploadToFBR(Invoice invoice, string token)
         {
             var result = new FBRResponse();
@@ -64,6 +62,7 @@ namespace C2B_FBR_Connect.Managers
                 if (string.IsNullOrEmpty(_currentCompany.SellerNTN))
                     throw new InvalidOperationException("Seller NTN not configured. Please update company settings.");
 
+                // Get full invoice details from QuickBooks
                 var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
                 if (details == null)
                 {
@@ -73,7 +72,38 @@ namespace C2B_FBR_Connect.Managers
                     return result;
                 }
 
-                // Add company details
+                // Map FBRInvoicePayload data to Invoice model for complete database storage
+                invoice.TotalAmount = details.TotalAmount;
+                invoice.TaxAmount = details.TaxAmount;
+                invoice.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
+                invoice.InvoiceDate = details.InvoiceDate;
+                invoice.CustomerAddress = details.BuyerAddress;
+                invoice.CustomerPhone = details.BuyerPhone;
+                invoice.CustomerNTN = details.CustomerNTN;
+                invoice.PaymentMode = "Cash"; // You can get this from details if available
+
+                // Map invoice items
+                invoice.Items = details.Items?.Select(i => new InvoiceItem
+                {
+                    ItemName = i.ItemName,
+                    Quantity = (int)i.Quantity,
+                    UnitPrice = i.UnitPrice,
+                    TotalPrice = i.TotalPrice,
+                    TaxRate = i.TaxRate,
+                    SalesTaxAmount = i.SalesTaxAmount,
+                    TotalValue = i.TotalPrice + i.SalesTaxAmount,
+                    HSCode = i.HSCode,
+                    UnitOfMeasure = i.UnitOfMeasure,
+                    RetailPrice = i.RetailPrice,
+                    ExtraTax = i.ExtraTax,
+                    FurtherTax = i.FurtherTax,
+                    FedPayable = i.FedPayable,
+                    SalesTaxWithheldAtSource = i.SalesTaxWithheldAtSource,
+                    Discount = i.Discount,
+                    SaleType = i.SaleType
+                }).ToList() ?? new List<InvoiceItem>();
+
+                // Add company details to FBR payload
                 details.SellerNTN = _currentCompany.SellerNTN;
                 details.SellerBusinessName = _currentCompany.CompanyName;
                 details.SellerProvince = _currentCompany.SellerProvince;
@@ -87,23 +117,36 @@ namespace C2B_FBR_Connect.Managers
                 {
                     invoice.FBR_IRN = response.IRN;
                     invoice.FBR_QRCode = response.IRN;
+                    invoice.Status = "Uploaded";
+                    invoice.UploadDate = DateTime.Now;
 
-                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Uploaded", response.IRN, null);
+                    // Save complete invoice data to database (including items)
+                    _db.SaveInvoiceWithDetails(invoice);
 
-                    // Generate PDF
+                    // Generate PDF from database data
                     try
                     {
-                        string outputPath = GetDefaultPDFPath(invoice);
-                        _pdf.GenerateInvoicePDF(invoice, details, outputPath);
-                        Console.WriteLine($"PDF generated successfully: {outputPath}");
+                        var invoiceFromDb = _db.GetInvoiceWithDetails(
+                            invoice.QuickBooksInvoiceId,
+                            _currentCompany.CompanyName);
+
+                        if (invoiceFromDb != null)
+                        {
+                            string outputPath = GetDefaultPDFPath(invoice);
+                            _pdf.GenerateInvoicePDF(invoiceFromDb, _currentCompany, outputPath);
+                            Console.WriteLine($"PDF generated successfully: {outputPath}");
+                        }
                     }
                     catch (Exception pdfEx)
                     {
                         Console.WriteLine($"Warning: PDF generation failed: {pdfEx.Message}");
+                        // Don't fail the whole operation if PDF fails
                     }
                 }
                 else
                 {
+                    invoice.Status = "Failed";
+                    invoice.ErrorMessage = response.ErrorMessage;
                     _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, response.ErrorMessage);
                 }
 
@@ -118,8 +161,6 @@ namespace C2B_FBR_Connect.Managers
             }
         }
 
-
-        // ✅ Upload multiple invoices to FBR in batch
         public async Task<Dictionary<string, FBRResponse>> UploadMultipleToFBR(List<Invoice> invoices, string token)
         {
             var results = new Dictionary<string, FBRResponse>();
@@ -133,17 +174,22 @@ namespace C2B_FBR_Connect.Managers
             return results;
         }
 
-
-        // ✅ Generate a PDF for invoice
-        public async void GeneratePDF(Invoice invoice, string outputPath)
+        public void GeneratePDF(Invoice invoice, string outputPath)
         {
             try
             {
-                var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
-                if (details == null)
-                    throw new Exception("Could not retrieve invoice details from QuickBooks");
+                if (_currentCompany == null)
+                    throw new InvalidOperationException("Company not set. Call SetCompany() first.");
 
-                _pdf.GenerateInvoicePDF(invoice, details, outputPath);
+                // Fetch complete invoice data from database
+                var invoiceFromDb = _db.GetInvoiceWithDetails(
+                    invoice.QuickBooksInvoiceId,
+                    _currentCompany.CompanyName);
+
+                if (invoiceFromDb == null)
+                    throw new Exception("Invoice not found in database");
+
+                _pdf.GenerateInvoicePDF(invoiceFromDb, _currentCompany, outputPath);
             }
             catch (Exception ex)
             {
@@ -180,8 +226,6 @@ namespace C2B_FBR_Connect.Managers
             return successCount;
         }
 
-
-        // Add this helper method to InvoiceManager class
         private string GetDefaultPDFPath(Invoice invoice)
         {
             string documentsPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -193,7 +237,5 @@ namespace C2B_FBR_Connect.Managers
             string fileName = $"Invoice_{invoice.InvoiceNumber}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
             return Path.Combine(invoiceFolder, fileName);
         }
-
-        
     }
 }

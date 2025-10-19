@@ -340,13 +340,30 @@ namespace C2B_FBR_Connect.Forms
         {
             if (invoices == null || invoices.Count == 0) return;
 
+            // Column header formatting
+            dgvInvoices.ColumnHeadersHeight = 30;
+            dgvInvoices.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.EnableResizing;
+            dgvInvoices.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            dgvInvoices.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(64, 64, 64);
+            dgvInvoices.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
+            dgvInvoices.EnableHeadersVisualStyles = false;
+
             // Hide unnecessary columns
             HideColumn("Id");
             HideColumn("QuickBooksInvoiceId");
             HideColumn("CompanyName");
-            //HideColumn("ErrorMessage");
             HideColumn("FBR_QRCode");
             HideColumn("CreatedDate");
+            HideColumn("ModifiedDate");
+            HideColumn("CustomerAddress");
+            HideColumn("CustomerPhone");
+            HideColumn("CustomerEmail");
+            HideColumn("TotalAmount");
+            HideColumn("TaxAmount");
+            HideColumn("DiscountAmount");
+            HideColumn("InvoiceDate");
+            HideColumn("PaymentMode");
+            HideColumn("Items");
 
             // Set column headers and formatting
             SetColumnHeader("InvoiceNumber", "Invoice #", 120);
@@ -356,23 +373,43 @@ namespace C2B_FBR_Connect.Forms
             SetColumnHeader("Status", "Status", 100);
             SetColumnHeader("FBR_IRN", "FBR IRN", 180);
             SetColumnHeader("UploadDate", "Upload Date", 150, "dd-MMM-yyyy HH:mm");
+            SetColumnHeader("ErrorMessage", "Error", 250);
 
             // Color code rows by status
             foreach (DataGridViewRow row in dgvInvoices.Rows)
             {
                 var status = row.Cells["Status"]?.Value?.ToString();
+
                 switch (status)
                 {
                     case "Uploaded":
-                        row.DefaultCellStyle.BackColor = Color.FromArgb(200, 250, 205);
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(200, 250, 205); // Light green
+                        row.DefaultCellStyle.ForeColor = Color.FromArgb(0, 100, 0);
                         break;
                     case "Failed":
-                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 205, 210);
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 205, 210); // Light red
+                        row.DefaultCellStyle.ForeColor = Color.FromArgb(139, 0, 0);
                         break;
                     case "Pending":
-                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 225);
+                        row.DefaultCellStyle.BackColor = Color.FromArgb(255, 248, 225); // Light yellow
+                        row.DefaultCellStyle.ForeColor = Color.FromArgb(139, 90, 0);
                         break;
                 }
+
+                // Add padding to cells for better appearance
+                row.DefaultCellStyle.Padding = new Padding(5, 0, 5, 0);
+            }
+
+            // Center align Status column
+            if (dgvInvoices.Columns["Status"] != null)
+            {
+                dgvInvoices.Columns["Status"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleCenter;
+            }
+
+            // Right align Amount column
+            if (dgvInvoices.Columns["Amount"] != null)
+            {
+                dgvInvoices.Columns["Amount"].DefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleRight;
             }
         }
 

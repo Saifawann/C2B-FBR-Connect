@@ -31,6 +31,7 @@ namespace C2B_FBR_Connect.Models
         public string CustomerNTN { get; set; }
         public string BuyerProvince { get; set; }
         public string BuyerAddress { get; set; }
+        public string BuyerPhone { get; set; }
         public string BuyerRegistrationType { get; set; } // "Registered" or "Unregistered"
 
         // Financial summary
