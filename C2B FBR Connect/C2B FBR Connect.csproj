@@ -9,10 +9,8 @@
 		<Nullable>enable</Nullable>
 		<UseWindowsForms>true</UseWindowsForms>
 		<ImplicitUsings>enable</ImplicitUsings>
-
 		<!-- Add these for better publishing -->
 		<RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
-		<UseWindowsForms>true</UseWindowsForms>
 		<ApplicationIcon />
 		<Win32Resource />
 		<PlatformTarget>AnyCPU</PlatformTarget>
@@ -24,23 +22,15 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<COMReference Include="QBFC16Lib">
+		<!-- QBXMLRP2 COM Reference - The only QuickBooks reference needed -->
+		<COMReference Include="QBXMLRP2">
 			<WrapperTool>tlbimp</WrapperTool>
 			<VersionMinor>0</VersionMinor>
 			<VersionMajor>1</VersionMajor>
-			<Guid>be74a146-9fc3-4285-9c72-fce0a829c009</Guid>
+			<Guid>4351618f-9059-4a79-b638-dcb8b97b3262</Guid>
 			<Lcid>0</Lcid>
 			<Isolated>false</Isolated>
 			<EmbedInteropTypes>true</EmbedInteropTypes>
-		</COMReference>
-		<COMReference Include="QBFC16Lib">
-		  <WrapperTool>tlbimp</WrapperTool>
-		  <VersionMinor>0</VersionMinor>
-		  <VersionMajor>1</VersionMajor>
-		  <Guid>1d05360b-2536-4277-83fd-bdf639e20f9e</Guid>
-		  <Lcid>0</Lcid>
-		  <Isolated>false</Isolated>
-		  <EmbedInteropTypes>true</EmbedInteropTypes>
 		</COMReference>
 	</ItemGroup>
 
