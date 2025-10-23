@@ -19,6 +19,10 @@ namespace C2B_FBR_Connect.Services
         private CompanyManager _companyManager;
         private FBRApiService _fbr;
 
+        // Store detected QBXML version
+        private short _qbXmlMajorVersion = 13;
+        private short _qbXmlMinorVersion = 0;
+
         public string CurrentCompanyName { get; private set; }
         public string CurrentCompanyFile { get; private set; }
 
@@ -31,6 +35,9 @@ namespace C2B_FBR_Connect.Services
                 _sessionManager = new QBSessionManager();
                 _sessionManager.OpenConnection("", "C2B Smart App");
                 _sessionManager.BeginSession("", ENOpenMode.omDontCare);
+
+                // Detect and store supported QBXML version
+                DetectQBXMLVersion();
 
                 // Get company info
                 FetchCompanyInfo();
@@ -46,11 +53,44 @@ namespace C2B_FBR_Connect.Services
             }
         }
 
+        private void DetectQBXMLVersion()
+        {
+            try
+            {
+                // Get supported versions from QuickBooks
+                string[] supportedVersions = (string[])_sessionManager.QBXMLVersionsForSession;
+
+                if (supportedVersions == null || supportedVersions.Length == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("No supported QBXML versions found, using default 13.0");
+                    _qbXmlMajorVersion = 13;
+                    _qbXmlMinorVersion = 0;
+                    return;
+                }
+
+                // Use the highest supported version
+                string highestVersion = supportedVersions[supportedVersions.Length - 1];
+                string[] versionParts = highestVersion.Split('.');
+
+                _qbXmlMajorVersion = short.Parse(versionParts[0]);
+                _qbXmlMinorVersion = versionParts.Length > 1 ? short.Parse(versionParts[1]) : (short)0;
+
+                System.Diagnostics.Debug.WriteLine($"✅ Using QBXML version: {_qbXmlMajorVersion}.{_qbXmlMinorVersion}");
+                System.Diagnostics.Debug.WriteLine($"Available versions: {string.Join(", ", supportedVersions)}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error detecting QBXML version: {ex.Message}. Using default 13.0");
+                _qbXmlMajorVersion = 13;
+                _qbXmlMinorVersion = 0;
+            }
+        }
+
         private void FetchCompanyInfo()
         {
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 var companyQuery = msgSetRq.AppendCompanyQueryRq();
@@ -76,6 +116,8 @@ namespace C2B_FBR_Connect.Services
 
                     CurrentCompanyName = _companyInfo.Name;
                     CurrentCompanyFile = _sessionManager.GetCurrentCompanyFileName();
+
+                    System.Diagnostics.Debug.WriteLine($"✅ Successfully fetched company info: {CurrentCompanyName}");
                 }
             }
             catch (Exception ex)
@@ -93,13 +135,15 @@ namespace C2B_FBR_Connect.Services
 
         public List<Invoice> FetchInvoices()
         {
-            if (!_isConnected) Connect();
-
-            var invoices = new List<Invoice>();
+            bool wasConnected = _isConnected;
 
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                if (!_isConnected) Connect();
+
+                var invoices = new List<Invoice>();
+
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 // Create the invoice query
@@ -141,23 +185,34 @@ namespace C2B_FBR_Connect.Services
                         }
                     }
                 }
+
+                return invoices;
             }
             catch (Exception ex)
             {
                 throw new Exception($"Failed to fetch all invoices: {ex.Message}", ex);
             }
-
-            return invoices;
+            finally
+            {
+                // Close session if we opened it in this method
+                if (!wasConnected && _isConnected)
+                {
+                    CloseSession();
+                    CloseConnection();
+                }
+            }
         }
 
         public async Task<FBRInvoicePayload> GetInvoiceDetails(string qbInvoiceId)
         {
             _fbr = new FBRApiService();
-            if (!_isConnected) Connect();
+            bool wasConnected = _isConnected;
 
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                if (!_isConnected) Connect();
+
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 var invoiceQuery = msgSetRq.AppendInvoiceQueryRq();
@@ -330,13 +385,22 @@ namespace C2B_FBR_Connect.Services
                         return payload;
                     }
                 }
+
+                return null;
             }
             catch (Exception ex)
             {
                 throw new Exception($"Failed to get invoice details: {ex.Message}", ex);
             }
-
-            return null;
+            finally
+            {
+                // Close session if we opened it in this method
+                if (!wasConnected && _isConnected)
+                {
+                    CloseSession();
+                    CloseConnection();
+                }
+            }
         }
 
         private CustomerData FetchCustomerDetails(string customerListID)
@@ -347,7 +411,7 @@ namespace C2B_FBR_Connect.Services
 
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 var customerQuery = msgSetRq.AppendCustomerQueryRq();
@@ -384,7 +448,7 @@ namespace C2B_FBR_Connect.Services
                                 // Check for NTN/CNIC
                                 if ((fieldName?.Equals("NTN", StringComparison.OrdinalIgnoreCase) == true ||
                                      fieldName?.Equals("CNIC", StringComparison.OrdinalIgnoreCase) == true ||
-                                     fieldName?.Equals("NTN_CNIC", StringComparison.OrdinalIgnoreCase) == true) &&
+                                     fieldName?.Equals("NTN/CNIC", StringComparison.OrdinalIgnoreCase) == true) &&
                                     !string.IsNullOrEmpty(fieldValue))
                                 {
                                     customerData.NTN = fieldValue;
@@ -417,7 +481,7 @@ namespace C2B_FBR_Connect.Services
 
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 var itemQuery = msgSetRq.AppendItemQueryRq();
@@ -569,8 +633,6 @@ namespace C2B_FBR_Connect.Services
                             else if (itemPrice.CustomPricePercent != 0)
                             {
                                 System.Diagnostics.Debug.WriteLine($"      Using percent-based price calculation");
-                                // Note: We'd need the base price here for percentage calculation
-                                // This might be why retail price is missing - we need the base price
                             }
                         }
                         else
@@ -632,13 +694,15 @@ namespace C2B_FBR_Connect.Services
         /// Fetches all price levels from QuickBooks
         public List<PriceLevel> FetchPriceLevels()
         {
-            if (!_isConnected) Connect();
-
-            var priceLevels = new List<PriceLevel>();
+            bool wasConnected = _isConnected;
 
             try
             {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", 16, 0);
+                if (!_isConnected) Connect();
+
+                var priceLevels = new List<PriceLevel>();
+
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
                 msgSetRq.AppendPriceLevelQueryRq();
@@ -685,7 +749,7 @@ namespace C2B_FBR_Connect.Services
                         }
                         else if (priceType == ENORPriceLevelRet.orplrPriceLevelPerItemRetCurrency)
                         {
-                            // Handle Per-Item pricing - THIS IS THE KEY FIX
+                            // Handle Per-Item pricing
                             IPriceLevelPerItemRetCurrency perItemCurrency = orPriceLevel.PriceLevelPerItemRetCurrency;
 
                             if (perItemCurrency != null)
@@ -746,13 +810,22 @@ namespace C2B_FBR_Connect.Services
                         System.Diagnostics.Debug.WriteLine($"  Fixed Percentage Level: {lvl.Name} - {lvl.FixedPercentage}%");
                     }
                 }
+
+                return priceLevels;
             }
             catch (Exception ex)
             {
                 throw new Exception($"Failed to fetch price levels: {ex.Message}", ex);
             }
-
-            return priceLevels;
+            finally
+            {
+                // Close session if we opened it in this method
+                if (!wasConnected && _isConnected)
+                {
+                    CloseSession();
+                    CloseConnection();
+                }
+            }
         }
 
         public void CloseSession()
@@ -763,6 +836,7 @@ namespace C2B_FBR_Connect.Services
                 {
                     _sessionManager.EndSession();
                     _isConnected = false;
+                    System.Diagnostics.Debug.WriteLine("✅ QuickBooks session closed successfully");
                 }
                 catch (Exception ex)
                 {
@@ -778,6 +852,7 @@ namespace C2B_FBR_Connect.Services
                 try
                 {
                     _sessionManager.CloseConnection();
+                    System.Diagnostics.Debug.WriteLine("✅ QuickBooks connection closed successfully");
                 }
                 catch (Exception ex)
                 {
@@ -824,8 +899,8 @@ namespace C2B_FBR_Connect.Services
         public string State { get; set; }
         public string PostalCode { get; set; }
         public string Country { get; set; }
-        public string Phone { get; set; }      // Add this
-        public string Email { get; set; }       // Add this
+        public string Phone { get; set; }
+        public string Email { get; set; }
     }
 
     internal class CustomerData
@@ -850,7 +925,7 @@ namespace C2B_FBR_Connect.Services
         public bool IsActive { get; set; }
         public string PriceLevelType { get; set; }
         public List<PriceLevelItem> Items { get; set; }
-        public double FixedPercentage { get; set; } // Add this
+        public double FixedPercentage { get; set; }
     }
 
     public class PriceLevelItem

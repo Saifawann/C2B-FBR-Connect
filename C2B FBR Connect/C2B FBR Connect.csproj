@@ -13,41 +13,36 @@
 		<!-- Add these for better publishing -->
 		<RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
 		<UseWindowsForms>true</UseWindowsForms>
-		<ApplicationIcon />
+		<ApplicationIcon>favicon.ico</ApplicationIcon>
 		<Win32Resource />
-		<PlatformTarget>AnyCPU</PlatformTarget>
-		<Platforms>AnyCPU;x86</Platforms>
+		<PlatformTarget>x86</PlatformTarget>
+		<Platforms>x86</Platforms>
 	</PropertyGroup>
 
 	<ItemGroup>
+		<None Remove="assets\favicon.ico" />
 		<None Remove="assets\fbr_logo.png" />
 	</ItemGroup>
 
 	<ItemGroup>
-		<COMReference Include="QBFC16Lib">
-			<WrapperTool>tlbimp</WrapperTool>
-			<VersionMinor>0</VersionMinor>
-			<VersionMajor>1</VersionMajor>
-			<Guid>be74a146-9fc3-4285-9c72-fce0a829c009</Guid>
-			<Lcid>0</Lcid>
-			<Isolated>false</Isolated>
-			<EmbedInteropTypes>true</EmbedInteropTypes>
-		</COMReference>
-		<COMReference Include="QBFC16Lib">
-		  <WrapperTool>tlbimp</WrapperTool>
-		  <VersionMinor>0</VersionMinor>
-		  <VersionMajor>1</VersionMajor>
-		  <Guid>1d05360b-2536-4277-83fd-bdf639e20f9e</Guid>
-		  <Lcid>0</Lcid>
-		  <Isolated>false</Isolated>
-		  <EmbedInteropTypes>true</EmbedInteropTypes>
-		</COMReference>
+	  <COMReference Include="QBFC16Lib">
+	    <WrapperTool>tlbimp</WrapperTool>
+	    <VersionMinor>0</VersionMinor>
+	    <VersionMajor>1</VersionMajor>
+	    <Guid>1d05360b-2536-4277-83fd-bdf639e20f9e</Guid>
+	    <Lcid>0</Lcid>
+	    <Isolated>false</Isolated>
+	    <EmbedInteropTypes>true</EmbedInteropTypes>
+	  </COMReference>
 	</ItemGroup>
-
 	<ItemGroup>
+		<Content Include="assets\favicon.ico">
+		  <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</Content>
 		<Content Include="assets\fbr_logo.png">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 		</Content>
+		<Content Include="favicon.ico" />
 	</ItemGroup>
 
 	<ItemGroup>
