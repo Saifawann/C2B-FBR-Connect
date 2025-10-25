@@ -320,7 +320,7 @@ namespace C2B_FBR_Connect.Services
                 buyerProvince = invoice.BuyerProvince,
                 buyerAddress = invoice.BuyerAddress,
                 buyerRegistrationType = invoice.BuyerRegistrationType,
-                invoiceRefNo = invoice.InvoiceNumber,
+                invoiceRefNo = "",
                 scenarioId = scenarioId,
                 items = invoice.Items?.Select(item => new
                 {
@@ -335,7 +335,7 @@ namespace C2B_FBR_Connect.Services
                     salesTaxApplicable = item.SalesTaxAmount,
                     extraTax = item.ExtraTax,
                     furtherTax = item.FurtherTax,
-                    discount = 0.00,
+                    discount = item.Discount,  // ✅ CHANGED: Uses item.Discount instead of 0.00
                     fedPayable = 0.00,
                     salesTaxWithheldAtSource = 0.00,
                     saleType = "Goods at standard rate (default)"

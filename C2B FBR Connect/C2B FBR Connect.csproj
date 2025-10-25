@@ -9,6 +9,7 @@
 		<Nullable>enable</Nullable>
 		<UseWindowsForms>true</UseWindowsForms>
 		<ImplicitUsings>enable</ImplicitUsings>
+		<LangVersion>preview</LangVersion>
 
 		<!-- Add these for better publishing -->
 		<RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
