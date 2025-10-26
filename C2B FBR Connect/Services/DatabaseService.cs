@@ -15,6 +15,8 @@ namespace C2B_FBR_Connect.Services
         private const int MaxRetries = 3;
         private const int RetryDelayMs = 100;
 
+        public string DatabasePath => _dbPath;
+
         public DatabaseService()
         {
             _dbPath = Path.Combine(
@@ -113,6 +115,18 @@ namespace C2B_FBR_Connect.Services
                 ExecuteNonQuery(conn, createCompaniesTable);
                 ExecuteNonQuery(conn, createInvoicesTable);
                 ExecuteNonQuery(conn, createInvoiceItemsTable);
+
+                // Create TransactionTypes table
+                string createTransactionTypesTable = @"
+                    CREATE TABLE IF NOT EXISTS TransactionTypes (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        TransactionTypeId INTEGER NOT NULL UNIQUE,
+                        TransactionDesc TEXT NOT NULL,
+                        LastUpdated TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_transaction_type_id ON TransactionTypes(TransactionTypeId);
+                ";
+                ExecuteNonQuery(conn, createTransactionTypesTable);
             }
         }
 
@@ -546,6 +560,123 @@ namespace C2B_FBR_Connect.Services
                 ErrorMessage = reader["ErrorMessage"]?.ToString(),
                 Items = new List<InvoiceItem>()
             };
+        }
+
+        #endregion
+
+        #region Transaction Types Methods
+
+        public void SaveTransactionTypes(List<TransactionType> transactionTypes)
+        {
+            ExecuteWithRetry(() =>
+            {
+                using (var connection = new SQLiteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    using (var transaction = connection.BeginTransaction())
+                    {
+                        try
+                        {
+                            // Clear existing data
+                            using (var deleteCmd = new SQLiteCommand("DELETE FROM TransactionTypes", connection, transaction))
+                            {
+                                deleteCmd.ExecuteNonQuery();
+                            }
+
+                            // Insert new data
+                            foreach (var transType in transactionTypes)
+                            {
+                                string sql = @"
+                                    INSERT INTO TransactionTypes (TransactionTypeId, TransactionDesc, LastUpdated)
+                                    VALUES (@TransactionTypeId, @TransactionDesc, @LastUpdated)";
+
+                                using (var cmd = new SQLiteCommand(sql, connection, transaction))
+                                {
+                                    cmd.Parameters.AddWithValue("@TransactionTypeId", transType.TransactionTypeId);
+                                    cmd.Parameters.AddWithValue("@TransactionDesc", transType.TransactionDesc);
+                                    cmd.Parameters.AddWithValue("@LastUpdated", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                                    cmd.ExecuteNonQuery();
+                                }
+                            }
+
+                            transaction.Commit();
+                        }
+                        catch
+                        {
+                            transaction.Rollback();
+                            throw;
+                        }
+                    }
+                }
+                return true;
+            }, "SaveTransactionTypes");
+        }
+
+        public List<TransactionType> GetTransactionTypes()
+        {
+            return ExecuteWithRetry(() =>
+            {
+                var transactionTypes = new List<TransactionType>();
+
+                using (var connection = new SQLiteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    string sql = "SELECT Id, TransactionTypeId, TransactionDesc, LastUpdated FROM TransactionTypes ORDER BY TransactionDesc";
+
+                    using (var command = new SQLiteCommand(sql, connection))
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            transactionTypes.Add(new TransactionType
+                            {
+                                Id = reader.GetInt32(0),
+                                TransactionTypeId = reader.GetInt32(1),
+                                TransactionDesc = reader.GetString(2),
+                                LastUpdated = DateTime.Parse(reader.GetString(3))
+                            });
+                        }
+                    }
+                }
+
+                return transactionTypes;
+            }, "GetTransactionTypes");
+        }
+
+        public TransactionType GetTransactionTypeById(int transactionTypeId)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using (var connection = new SQLiteConnection(_connectionString))
+                {
+                    connection.Open();
+
+                    string sql = "SELECT Id, TransactionTypeId, TransactionDesc, LastUpdated FROM TransactionTypes WHERE TransactionTypeId = @TransactionTypeId";
+
+                    using (var command = new SQLiteCommand(sql, connection))
+                    {
+                        command.Parameters.AddWithValue("@TransactionTypeId", transactionTypeId);
+
+                        using (var reader = command.ExecuteReader())
+                        {
+                            if (reader.Read())
+                            {
+                                return new TransactionType
+                                {
+                                    Id = reader.GetInt32(0),
+                                    TransactionTypeId = reader.GetInt32(1),
+                                    TransactionDesc = reader.GetString(2),
+                                    LastUpdated = DateTime.Parse(reader.GetString(3))
+                                };
+                            }
+                        }
+                    }
+                }
+
+                return null;
+            }, "GetTransactionTypeById");
         }
 
         #endregion

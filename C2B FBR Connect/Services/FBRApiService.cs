@@ -2,6 +2,7 @@
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Text;
@@ -27,6 +28,117 @@ namespace C2B_FBR_Connect.Services
 
             _httpClient = new HttpClient(_httpClientHandler);
             _httpClient.Timeout = TimeSpan.FromSeconds(30);
+        }
+
+        public async Task<List<TransactionType>> FetchTransactionTypesAsync(string authToken = null)
+        {
+            var transactionTypes = new List<TransactionType>();
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, "https://gw.fbr.gov.pk/pdi/v1/transtypecode");
+
+                if (!string.IsNullOrWhiteSpace(authToken))
+                {
+                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                }
+
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonString = await response.Content.ReadAsStringAsync();
+                    var options = new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    };
+
+                    var apiResponse = System.Text.Json.JsonSerializer.Deserialize<List<TransactionTypeResponse>>(jsonString, options);
+
+                    if (apiResponse != null)
+                    {
+                        foreach (var item in apiResponse)
+                        {
+                            transactionTypes.Add(new TransactionType
+                            {
+                                TransactionTypeId = item.TransactioN_TYPE_ID,
+                                TransactionDesc = item.TransactioN_DESC,
+                                LastUpdated = DateTime.Now
+                            });
+                        }
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"✅ Fetched {transactionTypes.Count} transaction types from FBR");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"⚠️ Failed to fetch transaction types: {response.StatusCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error fetching transaction types: {ex.Message}");
+            }
+
+            return transactionTypes;
+        }
+
+        public async Task<List<Province>> FetchProvincesAsync(string authToken = null)
+        {
+            var provinces = new List<Province>();
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, "https://gw.fbr.gov.pk/pdi/v1/provinces");
+
+                if (!string.IsNullOrWhiteSpace(authToken))
+                {
+                    request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                }
+
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+
+                if (response.IsSuccessStatusCode)
+                {
+                    var jsonString = await response.Content.ReadAsStringAsync();
+                    var options = new System.Text.Json.JsonSerializerOptions
+                    {
+                        PropertyNameCaseInsensitive = true
+                    };
+
+                    var apiResponse = System.Text.Json.JsonSerializer.Deserialize<List<ProvinceResponse>>(jsonString, options);
+
+                    if (apiResponse != null)
+                    {
+                        foreach (var item in apiResponse)
+                        {
+                            provinces.Add(new Province
+                            {
+                                StateProvinceCode = item.StateProvinceCode,
+                                StateProvinceDesc = item.StateProvinceDesc
+                            });
+                        }
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"✅ Fetched {provinces.Count} provinces from FBR");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"⚠️ Failed to fetch provinces: {response.StatusCode}");
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error fetching provinces: {ex.Message}");
+            }
+
+            return provinces;
         }
 
         public async Task<FBRResponse> UploadInvoice(FBRInvoicePayload invoice, string authToken)
@@ -169,6 +281,18 @@ namespace C2B_FBR_Connect.Services
         {
             public int UoM_ID { get; set; }
             public string Description { get; set; } = string.Empty;
+        }
+
+        private class TransactionTypeResponse
+        {
+            public int TransactioN_TYPE_ID { get; set; }
+            public string TransactioN_DESC { get; set; }
+        }
+
+        private class ProvinceResponse
+        {
+            public int StateProvinceCode { get; set; }
+            public string StateProvinceDesc { get; set; }
         }
 
         private FBRResponse ParseFBRResponse(string responseString)
@@ -335,7 +459,7 @@ namespace C2B_FBR_Connect.Services
                     salesTaxApplicable = item.SalesTaxAmount,
                     extraTax = item.ExtraTax,
                     furtherTax = item.FurtherTax,
-                    discount = item.Discount,  // ✅ CHANGED: Uses item.Discount instead of 0.00
+                    discount = item.Discount,
                     fedPayable = 0.00,
                     salesTaxWithheldAtSource = 0.00,
                     saleType = "Goods at standard rate (default)"

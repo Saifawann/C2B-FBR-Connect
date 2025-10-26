@@ -1,9 +1,12 @@
 ﻿using C2B_FBR_Connect.Models;
+using C2B_FBR_Connect.Services;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Drawing;
+using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace C2B_FBR_Connect.Forms
@@ -14,7 +17,7 @@ namespace C2B_FBR_Connect.Forms
         private TextBox txtFBRToken;
         private TextBox txtSellerNTN;
         private TextBox txtSellerAddress;
-        private TextBox txtSellerProvince;
+        private ComboBox cboSellerProvince;
         private TextBox txtSellerPhone;
         private TextBox txtSellerEmail;
         private Button btnSave;
@@ -29,12 +32,16 @@ namespace C2B_FBR_Connect.Forms
         private Label lblInstructions;
         private GroupBox grpSellerInfo;
 
+        private Dictionary<string, int> _provinceCodeMap = new Dictionary<string, int>();
+        private FBRApiService _fbrApi;
         public Company Company { get; private set; }
 
         public CompanySetupForm(string companyName, Company existingCompany = null)
         {
             InitializeComponent();
             SetupCustomUI();
+
+            _fbrApi = new FBRApiService();
 
             txtCompanyName.Text = companyName;
             txtCompanyName.ReadOnly = true;
@@ -47,9 +54,7 @@ namespace C2B_FBR_Connect.Forms
                 // Auto-populate from QuickBooks company info (read-only for address)
                 txtSellerAddress.Text = existingCompany.SellerAddress ?? "Fetched from QuickBooks";
 
-                // Province is editable
-                txtSellerProvince.Text = existingCompany.SellerProvince ?? "";
-
+                // Province will be set after loading from API
                 txtSellerPhone.Text = existingCompany.SellerPhone ?? "";
                 txtSellerEmail.Text = existingCompany.SellerEmail ?? "";
 
@@ -59,8 +64,10 @@ namespace C2B_FBR_Connect.Forms
             {
                 Company = new Company { CompanyName = companyName };
                 txtSellerAddress.Text = "Will be fetched from QuickBooks";
-                txtSellerProvince.Text = "";
             }
+
+            // Load provinces from API
+            LoadProvincesAsync(existingCompany?.SellerProvince);
         }
 
         private void SetupCustomUI()
@@ -158,13 +165,12 @@ namespace C2B_FBR_Connect.Forms
                 Size = new Size(120, 23)
             };
 
-            txtSellerProvince = new TextBox
+            cboSellerProvince = new ComboBox
             {
                 Location = new Point(128, 117),
                 Size = new Size(315, 23),
                 Font = new Font("Arial", 9F),
-                PlaceholderText = "Enter Province (e.g., Punjab, Sindh, KPK, Balochistan)",
-                ReadOnly = false,
+                DropDownStyle = ComboBoxStyle.DropDownList,
                 BackColor = Color.White,
                 ForeColor = Color.Black
             };
@@ -217,7 +223,7 @@ namespace C2B_FBR_Connect.Forms
             grpSellerInfo.Controls.Add(lblSellerAddress);
             grpSellerInfo.Controls.Add(txtSellerAddress);
             grpSellerInfo.Controls.Add(lblSellerProvince);
-            grpSellerInfo.Controls.Add(txtSellerProvince);
+            grpSellerInfo.Controls.Add(cboSellerProvince);
             grpSellerInfo.Controls.Add(lblSellerPhone);
             grpSellerInfo.Controls.Add(txtSellerPhone);
             grpSellerInfo.Controls.Add(lblSellerEmail);
@@ -260,6 +266,92 @@ namespace C2B_FBR_Connect.Forms
             this.Controls.Add(btnCancel);
         }
 
+        private async void LoadProvincesAsync(string selectedProvince = null)
+        {
+            cboSellerProvince.Items.Clear();
+            cboSellerProvince.Items.Add("Loading provinces...");
+            cboSellerProvince.SelectedIndex = 0;
+            cboSellerProvince.Enabled = false;
+
+            try
+            {
+                // Get token if available
+                string token = !string.IsNullOrWhiteSpace(txtFBRToken.Text) ? txtFBRToken.Text : null;
+
+                // Fetch provinces from FBR API using FBRApiService
+                var provinces = await _fbrApi.FetchProvincesAsync(token);
+
+                cboSellerProvince.Items.Clear();
+                _provinceCodeMap.Clear();
+
+                if (provinces != null && provinces.Count > 0)
+                {
+                    foreach (var province in provinces)
+                    {
+                        cboSellerProvince.Items.Add(province.StateProvinceDesc);
+                        _provinceCodeMap[province.StateProvinceDesc] = province.StateProvinceCode;
+                    }
+
+                    // Select the existing province if available
+                    if (!string.IsNullOrWhiteSpace(selectedProvince))
+                    {
+                        int index = cboSellerProvince.FindStringExact(selectedProvince);
+                        if (index >= 0)
+                        {
+                            cboSellerProvince.SelectedIndex = index;
+                        }
+                    }
+                }
+                else
+                {
+                    AddFallbackProvinces();
+                }
+            }
+            catch (Exception)
+            {
+                AddFallbackProvinces();
+            }
+            finally
+            {
+                cboSellerProvince.Enabled = true;
+            }
+        }
+
+        private void AddFallbackProvinces()
+        {
+            cboSellerProvince.Items.Clear();
+            _provinceCodeMap.Clear();
+
+            var fallbackProvinces = new Dictionary<string, int>
+            {
+                { "BALOCHISTAN", 2 },
+                { "AZAD JAMMU AND KASHMIR", 4 },
+                { "CAPITAL TERRITORY", 5 },
+                { "KHYBER PAKHTUNKHWA", 6 },
+                { "PUNJAB", 7 },
+                { "SINDH", 8 },
+                { "GILGIT BALTISTAN", 9 }
+            };
+
+            foreach (var province in fallbackProvinces)
+            {
+                cboSellerProvince.Items.Add(province.Key);
+                _provinceCodeMap[province.Key] = province.Value;
+            }
+        }
+
+        public int GetSelectedProvinceCode()
+        {
+            if (cboSellerProvince.SelectedItem != null)
+            {
+                string selectedProvince = cboSellerProvince.SelectedItem.ToString();
+                if (_provinceCodeMap.ContainsKey(selectedProvince))
+                {
+                    return _provinceCodeMap[selectedProvince];
+                }
+            }
+            return 0;
+        }
 
         private void BtnSave_Click(object sender, EventArgs e)
         {
@@ -285,12 +377,12 @@ namespace C2B_FBR_Connect.Forms
             }
 
             // Validate Seller Province
-            if (string.IsNullOrWhiteSpace(txtSellerProvince.Text))
+            if (cboSellerProvince.SelectedItem == null)
             {
-                MessageBox.Show("Please enter Seller Province. This is required for FBR invoicing.",
+                MessageBox.Show("Please select Seller Province. This is required for FBR invoicing.",
                     "Validation Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtSellerProvince.Focus();
+                cboSellerProvince.Focus();
                 this.DialogResult = DialogResult.None;
                 return;
             }
@@ -299,7 +391,7 @@ namespace C2B_FBR_Connect.Forms
             Company.CompanyName = txtCompanyName.Text.Trim();
             Company.FBRToken = txtFBRToken.Text.Trim();
             Company.SellerNTN = txtSellerNTN.Text.Trim();
-            Company.SellerProvince = txtSellerProvince.Text.Trim();
+            Company.SellerProvince = cboSellerProvince.SelectedItem.ToString();
             Company.SellerPhone = txtSellerPhone.Text?.Trim();
             Company.SellerEmail = txtSellerEmail.Text?.Trim();
 

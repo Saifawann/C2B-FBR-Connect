@@ -14,6 +14,7 @@ namespace C2B_FBR_Connect.Forms
     public partial class MainForm : Form
     {
         private DataGridView dgvInvoices = null!;
+        private CheckBox chkSelectAll = null!;
         private Button btnFetchInvoices = null!;
         private Button btnUploadSelected = null!;
         private Button btnUploadAll = null!;
@@ -40,6 +41,10 @@ namespace C2B_FBR_Connect.Forms
         private InvoiceManager _invoiceManager = null!;
         private Company? _currentCompany;
         private List<Invoice>? _allInvoices;
+        private string? _currentSortColumn;
+        private bool _sortAscending = true;
+        private TransactionTypeService _transactionTypeService = null!;
+
 
         public MainForm()
         {
@@ -219,7 +224,7 @@ namespace C2B_FBR_Connect.Forms
                 Dock = DockStyle.Fill,
                 AllowUserToAddRows = false,
                 AllowUserToDeleteRows = false,
-                ReadOnly = true,
+                ReadOnly = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = true,
                 AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
@@ -245,6 +250,10 @@ namespace C2B_FBR_Connect.Forms
             };
             dgvInvoices.EnableHeadersVisualStyles = false;
             dgvInvoices.CellDoubleClick += DgvInvoices_CellDoubleClick;
+            dgvInvoices.CellClick += DgvInvoices_CellClick;
+            dgvInvoices.CellContentClick += DgvInvoices_CellContentClick;
+            dgvInvoices.ColumnHeaderMouseClick += DgvInvoices_ColumnHeaderMouseClick;
+            dgvInvoices.DataBindingComplete += DgvInvoices_DataBindingComplete;
             dgvInvoices.DoubleBuffered(true);
 
             // Status Strip
@@ -305,6 +314,8 @@ namespace C2B_FBR_Connect.Forms
             _pdf = new PDFService();
             _companyManager = new CompanyManager(_db);
             _invoiceManager = new InvoiceManager(_db, _qb, _fbr, _pdf);
+            _transactionTypeService = new TransactionTypeService(_db);
+
 
             ConnectToQuickBooks();
         }
@@ -343,6 +354,7 @@ namespace C2B_FBR_Connect.Forms
                     _qb.Connect(_currentCompany);
 
                     _invoiceManager.SetCompany(_currentCompany);
+                    LoadTransactionTypesAsync();
                     LoadInvoices();
                 }
 
@@ -357,6 +369,35 @@ namespace C2B_FBR_Connect.Forms
                     MessageBoxIcon.Error);
 
                 return retryResult == DialogResult.Retry ? ConnectToQuickBooks() : false;
+            }
+        }
+
+        private async void LoadTransactionTypesAsync()
+        {
+            try
+            {
+                statusLabel.Text = "Loading transaction types from FBR...";
+
+                // Get token from current company if available
+                string token = _currentCompany?.FBRToken;
+
+                bool success = await _transactionTypeService.FetchAndStoreTransactionTypesAsync(token);
+
+                if (success)
+                {
+                    System.Diagnostics.Debug.WriteLine("✅ Transaction types loaded successfully");
+                    statusLabel.Text = "Transaction types loaded";
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("⚠️ Failed to load transaction types from API");
+                    statusLabel.Text = "Ready";
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error loading transaction types: {ex.Message}");
+                statusLabel.Text = "Ready";
             }
         }
 
@@ -417,6 +458,20 @@ namespace C2B_FBR_Connect.Forms
         {
             if (invoices == null || invoices.Count == 0) return;
 
+            // Add checkbox column if it doesn't exist
+            if (dgvInvoices.Columns["Select"] == null)
+            {
+                var checkBoxColumn = new DataGridViewCheckBoxColumn
+                {
+                    Name = "Select",
+                    HeaderText = "",
+                    Width = 40,
+                    FillWeight = 5,
+                    ReadOnly = false
+                };
+                dgvInvoices.Columns.Insert(0, checkBoxColumn);
+            }
+
             HideColumn("Id");
             HideColumn("QuickBooksInvoiceId");
             HideColumn("CompanyName");
@@ -441,6 +496,27 @@ namespace C2B_FBR_Connect.Forms
             SetColumnHeader("FBR_IRN", "FBR IRN", 20);
             SetColumnHeader("UploadDate", "Upload Date", 18, "dd-MMM-yyyy HH:mm");
             SetColumnHeader("ErrorMessage", "Error", 30);
+
+            // Set all columns except checkbox to read-only
+            foreach (DataGridViewColumn column in dgvInvoices.Columns)
+            {
+                if (column.Name != "Select")
+                {
+                    column.ReadOnly = true;
+                }
+            }
+
+            // Initialize checkbox values to false (only if Select column exists)
+            if (dgvInvoices.Columns.Contains("Select"))
+            {
+                foreach (DataGridViewRow row in dgvInvoices.Rows)
+                {
+                    if (row.Cells["Select"].Value == null)
+                    {
+                        row.Cells["Select"].Value = false;
+                    }
+                }
+            }
 
             // Remove all custom row coloring, keep default DataGridView colors
             foreach (DataGridViewRow row in dgvInvoices.Rows)
@@ -493,6 +569,101 @@ namespace C2B_FBR_Connect.Forms
             statusStats.Text = $"Total: {total} | Pending: {pending} | Uploaded: {uploaded} | Failed: {failed}";
         }
 
+        private void SortDataGridView(string columnName)
+        {
+            if (dgvInvoices.DataSource == null) return;
+
+            var dataSource = dgvInvoices.DataSource as List<Invoice>;
+            if (dataSource == null) return;
+
+            // Determine sort direction
+            if (_currentSortColumn == columnName)
+            {
+                _sortAscending = !_sortAscending;
+            }
+            else
+            {
+                _currentSortColumn = columnName;
+                _sortAscending = true;
+            }
+
+            // Sort the data
+            List<Invoice> sortedList;
+            switch (columnName)
+            {
+                case "InvoiceNumber":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.InvoiceNumber).ToList()
+                        : dataSource.OrderByDescending(i => i.InvoiceNumber).ToList();
+                    break;
+                case "CustomerName":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.CustomerName).ToList()
+                        : dataSource.OrderByDescending(i => i.CustomerName).ToList();
+                    break;
+                case "CustomerNTN":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.CustomerNTN).ToList()
+                        : dataSource.OrderByDescending(i => i.CustomerNTN).ToList();
+                    break;
+                case "Amount":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.Amount).ToList()
+                        : dataSource.OrderByDescending(i => i.Amount).ToList();
+                    break;
+                case "Status":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.Status).ToList()
+                        : dataSource.OrderByDescending(i => i.Status).ToList();
+                    break;
+                case "FBR_IRN":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.FBR_IRN).ToList()
+                        : dataSource.OrderByDescending(i => i.FBR_IRN).ToList();
+                    break;
+                case "UploadDate":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.UploadDate).ToList()
+                        : dataSource.OrderByDescending(i => i.UploadDate).ToList();
+                    break;
+                case "ErrorMessage":
+                    sortedList = _sortAscending
+                        ? dataSource.OrderBy(i => i.ErrorMessage).ToList()
+                        : dataSource.OrderByDescending(i => i.ErrorMessage).ToList();
+                    break;
+                default:
+                    return;
+            }
+
+            // Update the data source
+            dgvInvoices.DataSource = null;
+            dgvInvoices.DataSource = sortedList;
+            FormatDataGridView(sortedList);
+
+            // Update column header to show sort indicator
+            UpdateSortIndicator(columnName);
+        }
+
+        private void UpdateSortIndicator(string columnName)
+        {
+            // Reset all column headers
+            foreach (DataGridViewColumn column in dgvInvoices.Columns)
+            {
+                if (column.Name != "Select" && column.HeaderText != null)
+                {
+                    // Remove any existing sort indicators (▲ or ▼)
+                    column.HeaderText = column.HeaderText.Replace(" ▲", "").Replace(" ▼", "");
+                }
+            }
+
+            // Add sort indicator to current column
+            if (dgvInvoices.Columns[columnName] != null)
+            {
+                string indicator = _sortAscending ? " ▲" : " ▼";
+                dgvInvoices.Columns[columnName].HeaderText += indicator;
+            }
+        }
+
         private void CboStatusFilter_SelectedIndexChanged(object? sender, EventArgs e)
         {
             ApplyFilters();
@@ -511,6 +682,78 @@ namespace C2B_FBR_Connect.Forms
             if (invoice == null) return;
 
             ShowInvoiceDetails(invoice);
+        }
+
+        private void DgvInvoices_CellContentClick(object? sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+
+            // Handle checkbox clicks
+            if (dgvInvoices.Columns[e.ColumnIndex].Name == "Select")
+            {
+                dgvInvoices.CommitEdit(DataGridViewDataErrorContexts.Commit);
+            }
+        }
+
+        private void DgvInvoices_CellClick(object? sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+
+            // Handle checkbox clicks - toggle the value
+            if (dgvInvoices.Columns[e.ColumnIndex].Name == "Select")
+            {
+                var currentValue = dgvInvoices.Rows[e.RowIndex].Cells["Select"].Value;
+                bool isChecked = currentValue != null && (bool)currentValue;
+                dgvInvoices.Rows[e.RowIndex].Cells["Select"].Value = !isChecked;
+                dgvInvoices.RefreshEdit();
+            }
+        }
+
+        private void DgvInvoices_ColumnHeaderMouseClick(object? sender, DataGridViewCellMouseEventArgs e)
+        {
+            // Check if click is on the checkbox column header
+            if (dgvInvoices.Columns[e.ColumnIndex].Name == "Select")
+            {
+                // Toggle select all
+                bool allSelected = true;
+                foreach (DataGridViewRow row in dgvInvoices.Rows)
+                {
+                    if (row.Cells["Select"].Value == null || !(bool)row.Cells["Select"].Value)
+                    {
+                        allSelected = false;
+                        break;
+                    }
+                }
+
+                // Set all checkboxes to opposite of current state
+                dgvInvoices.EndEdit();
+                foreach (DataGridViewRow row in dgvInvoices.Rows)
+                {
+                    row.Cells["Select"].Value = !allSelected;
+                }
+                dgvInvoices.RefreshEdit();
+                dgvInvoices.Refresh();
+            }
+            else
+            {
+                // Handle sorting for other columns
+                SortDataGridView(dgvInvoices.Columns[e.ColumnIndex].Name);
+            }
+        }
+
+        private void DgvInvoices_DataBindingComplete(object? sender, DataGridViewBindingCompleteEventArgs e)
+        {
+            // Initialize all checkboxes to false when data is bound (only if Select column exists)
+            if (dgvInvoices.Columns.Contains("Select"))
+            {
+                foreach (DataGridViewRow row in dgvInvoices.Rows)
+                {
+                    if (row.Cells["Select"].Value == null)
+                    {
+                        row.Cells["Select"].Value = false;
+                    }
+                }
+            }
         }
 
         private async void BtnFetchInvoices_Click(object? sender, EventArgs e)
@@ -574,16 +817,28 @@ namespace C2B_FBR_Connect.Forms
                 return;
             }
 
-            var selectedRows = dgvInvoices.SelectedRows;
-            if (selectedRows.Count == 0)
+            // Get checked rows instead of selected rows
+            var checkedRows = new List<DataGridViewRow>();
+            if (dgvInvoices.Columns.Contains("Select"))
             {
-                MessageBox.Show("Please select invoices to upload.",
+                foreach (DataGridViewRow row in dgvInvoices.Rows)
+                {
+                    if (row.Cells["Select"].Value != null && (bool)row.Cells["Select"].Value)
+                    {
+                        checkedRows.Add(row);
+                    }
+                }
+            }
+
+            if (checkedRows.Count == 0)
+            {
+                MessageBox.Show("Please select invoices to upload using the checkboxes.",
                     "No Selection", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
             progressBar.Visible = true;
-            progressBar.Maximum = selectedRows.Count;
+            progressBar.Maximum = checkedRows.Count;
             progressBar.Value = 0;
             progressBar.Style = ProgressBarStyle.Blocks;
 
@@ -591,7 +846,7 @@ namespace C2B_FBR_Connect.Forms
             int failed = 0;
             var failedInvoices = new List<(string InvoiceNumber, string Error)>();
 
-            foreach (DataGridViewRow row in selectedRows)
+            foreach (DataGridViewRow row in checkedRows)
             {
                 var selectedInvoice = row.DataBoundItem as Invoice;
                 if (selectedInvoice != null && selectedInvoice.Status != "Uploaded")
@@ -1143,6 +1398,7 @@ namespace C2B_FBR_Connect.Forms
                         _companyManager.SaveCompany(_currentCompany);
                         _invoiceManager.SetCompany(_currentCompany);
                         LoadInvoices();
+                        LoadTransactionTypesAsync();
                         MessageBox.Show("Company settings saved successfully!", "Success",
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
