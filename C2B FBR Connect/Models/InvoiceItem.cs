@@ -23,6 +23,8 @@ namespace C2B_FBR_Connect.Models
 
         // Tax details
         public decimal TaxRate { get; set; }
+        public string Rate { get; set; }  // ✅ String for API: "18%", "Exempt", "0%", etc.
+
         public decimal SalesTaxAmount { get; set; }
         public decimal TotalValue { get; set; }
 
@@ -32,10 +34,12 @@ namespace C2B_FBR_Connect.Models
         public decimal RetailPrice { get; set; }
         public decimal ExtraTax { get; set; }
         public decimal FurtherTax { get; set; }
+        public string SroScheduleNo { get; set; }
         public decimal FedPayable { get; set; }
         public decimal SalesTaxWithheldAtSource { get; set; }
         public decimal Discount { get; set; }
         public string SaleType { get; set; }
+        public string SroItemSerialNo { get; set; }
     }
 
 }

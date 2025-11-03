@@ -30,22 +30,181 @@ namespace C2B_FBR_Connect.Managers
             _currentCompany = company;
         }
 
-        public List<Invoice> FetchFromQuickBooks()
+        public async Task<List<Invoice>> FetchFromQuickBooks()
         {
             try
             {
                 if (!_qb.Connect(_currentCompany))
                     throw new Exception("Failed to connect to QuickBooks");
 
-                var qbInvoices = _qb.FetchInvoices();
+                // ✅ CLEAR CACHE TO FORCE FRESH DATA
+                Console.WriteLine("🔄 Starting invoice fetch from QuickBooks...");
+                Console.WriteLine("🗑️ Clearing QuickBooks cache to fetch fresh data...");
 
+                // Fetch basic invoice list from QuickBooks
+                var qbInvoices = _qb.FetchInvoices();
+                Console.WriteLine($"📥 Found {qbInvoices.Count} invoices in QuickBooks\n");
+
+                int updatedCount = 0;
+                int newCount = 0;
+                int preservedCount = 0;
+
+                // For each invoice, fetch complete details including line items
                 foreach (var inv in qbInvoices)
-                    _db.SaveInvoice(inv);
+                {
+                    try
+                    {
+                        Console.WriteLine($"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                        Console.WriteLine($"🔹 Processing invoice: {inv.InvoiceNumber}");
+
+                        // ✅ STEP 1: Check if invoice exists in database FIRST
+                        var existingInvoice = _db.GetInvoiceWithDetails(
+                            inv.QuickBooksInvoiceId,
+                            _qb.CurrentCompanyName
+                        );
+
+                        // ✅ STEP 2: Get fresh detailed invoice data from QuickBooks (includes items with Sale Type)
+                        Console.WriteLine($"   🔍 Fetching detailed invoice data from QuickBooks...");
+                        var details = await _qb.GetInvoiceDetails(inv.QuickBooksInvoiceId);
+
+                        if (details == null)
+                        {
+                            Console.WriteLine($"   ⚠️ Could not fetch details for {inv.InvoiceNumber}");
+                            continue;
+                        }
+
+                        Console.WriteLine($"   ✅ Fetched {details.Items?.Count ?? 0} items from QuickBooks");
+
+                        // ✅ STEP 3: Map invoice header data
+                        inv.TotalAmount = details.TotalAmount;
+                        inv.TaxAmount = details.TaxAmount;
+                        inv.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
+                        inv.InvoiceDate = details.InvoiceDate;
+                        inv.CustomerAddress = details.BuyerAddress;
+                        inv.CustomerPhone = details.BuyerPhone;
+                        inv.CustomerNTN = details.CustomerNTN;
+                        inv.CustomerType = details.BuyerRegistrationType;
+                        inv.CustomerEmail = details.BuyerEmail ?? "";
+                        inv.PaymentMode = "Cash";
+
+                        // ✅ STEP 4: Map invoice items FROM THE DETAILED PAYLOAD (which has Sale Type!)
+                        inv.Items = new List<InvoiceItem>();
+
+                        if (details.Items != null && details.Items.Count > 0)
+                        {
+                            Console.WriteLine($"   📦 Mapping {details.Items.Count} items:");
+
+                            foreach (var fbrItem in details.Items)
+                            {
+                                Console.WriteLine($"      - {fbrItem.ItemName}");
+                                Console.WriteLine($"        Sale Type: '{fbrItem.SaleType}'");
+                                Console.WriteLine($"        HS Code: '{fbrItem.HSCode}'");
+                                Console.WriteLine($"        Quantity: {fbrItem.Quantity}");
+
+                                var invoiceItem = new InvoiceItem
+                                {
+                                    ItemName = fbrItem.ItemName ?? "",
+                                    ItemDescription = fbrItem.ItemName ?? "", // ✅ Use ItemName as description
+                                    Quantity = fbrItem.Quantity,
+                                    UnitPrice = fbrItem.UnitPrice,
+                                    TotalPrice = fbrItem.TotalPrice,
+                                    NetAmount = fbrItem.NetAmount,
+                                    TaxRate = fbrItem.TaxRate,
+                                    SalesTaxAmount = fbrItem.SalesTaxAmount,
+                                    TotalValue = fbrItem.TotalValue,
+                                    HSCode = fbrItem.HSCode ?? "",
+                                    UnitOfMeasure = fbrItem.UnitOfMeasure ?? "",
+                                    RetailPrice = fbrItem.RetailPrice,
+                                    ExtraTax = fbrItem.ExtraTax,
+                                    FurtherTax = fbrItem.FurtherTax,
+                                    FedPayable = fbrItem.FedPayable,
+                                    SalesTaxWithheldAtSource = fbrItem.SalesTaxWithheldAtSource,
+                                    Discount = fbrItem.Discount,
+                                    SaleType = fbrItem.SaleType ?? "Goods at standard rate (default)", // ✅ This comes from QB
+                                    SroScheduleNo = fbrItem.SroScheduleNo ?? "",
+                                    SroItemSerialNo = fbrItem.SroItemSerialNo ?? ""
+                                };
+
+                                inv.Items.Add(invoiceItem);
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine($"   ⚠️ No items found for this invoice");
+                        }
+
+                        // ✅ STEP 5: Preserve FBR upload status if invoice was already uploaded
+                        if (existingInvoice != null && existingInvoice.Status == "Uploaded")
+                        {
+                            Console.WriteLine($"   📌 Preserving upload status for {inv.InvoiceNumber}");
+
+                            inv.Status = "Uploaded";
+                            inv.FBR_IRN = existingInvoice.FBR_IRN;
+                            inv.FBR_QRCode = existingInvoice.FBR_QRCode;
+                            inv.UploadDate = existingInvoice.UploadDate;
+                            inv.ErrorMessage = existingInvoice.ErrorMessage;
+
+                            preservedCount++;
+                        }
+                        else if (existingInvoice != null)
+                        {
+                            Console.WriteLine($"   🔄 Updating existing invoice {inv.InvoiceNumber}");
+
+                            // Keep the existing status if not uploaded
+                            inv.Status = existingInvoice.Status;
+                            inv.ErrorMessage = existingInvoice.ErrorMessage;
+
+                            updatedCount++;
+                        }
+                        else
+                        {
+                            Console.WriteLine($"   ✨ New invoice detected: {inv.InvoiceNumber}");
+
+                            inv.Status = "Pending";
+                            newCount++;
+                        }
+
+                        // ✅ STEP 6: Save invoice with ALL details to database
+                        Console.WriteLine($"   💾 Saving to database...");
+                        _db.SaveInvoiceWithDetails(inv);
+
+                        Console.WriteLine($"   ✅ Saved {inv.InvoiceNumber} with {inv.Items?.Count ?? 0} items");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"   ❌ Error processing invoice {inv.InvoiceNumber}: {ex.Message}");
+                        Console.WriteLine($"   Stack: {ex.StackTrace}");
+
+                        // Still try to save basic invoice data
+                        try
+                        {
+                            inv.Status = "Error";
+                            inv.ErrorMessage = ex.Message;
+                            _db.SaveInvoice(inv);
+                        }
+                        catch (Exception saveEx)
+                        {
+                            Console.WriteLine($"   ❌ Could not save error state: {saveEx.Message}");
+                        }
+                    }
+                }
+
+                Console.WriteLine($"\n╔════════════════════════════════════════╗");
+                Console.WriteLine($"║         FETCH SUMMARY                  ║");
+                Console.WriteLine($"╚════════════════════════════════════════╝");
+                Console.WriteLine($"✨ New invoices: {newCount}");
+                Console.WriteLine($"🔄 Updated invoices: {updatedCount}");
+                Console.WriteLine($"📌 Preserved uploaded: {preservedCount}");
+                Console.WriteLine($"📝 Total processed: {qbInvoices.Count}");
+                Console.WriteLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
                 return _db.GetInvoices(_qb.CurrentCompanyName);
             }
             catch (Exception ex)
             {
+                Console.WriteLine($"\n❌ FATAL ERROR in FetchFromQuickBooks:");
+                Console.WriteLine($"   Message: {ex.Message}");
+                Console.WriteLine($"   Stack: {ex.StackTrace}");
                 throw new Exception($"Error fetching invoices from QuickBooks: {ex.Message}", ex);
             }
         }

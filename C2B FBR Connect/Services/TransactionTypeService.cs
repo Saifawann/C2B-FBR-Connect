@@ -48,4 +48,4 @@ namespace C2B_FBR_Connect.Services
             return _db.GetTransactionTypeById(transactionTypeId);
         }
     }
-}
+} 

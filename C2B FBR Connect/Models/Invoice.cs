@@ -17,6 +17,7 @@ namespace C2B_FBR_Connect.Models
         public string CustomerAddress { get; set; }
         public string CustomerPhone { get; set; }
         public string CustomerEmail { get; set; }
+        public string CustomerType { get; set; } 
 
         // Invoice Financial Details
         public decimal Amount { get; set; }

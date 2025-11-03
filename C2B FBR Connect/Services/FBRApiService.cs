@@ -65,7 +65,7 @@ namespace C2B_FBR_Connect.Services
                             transactionTypes.Add(new TransactionType
                             {
                                 TransactionTypeId = item.TransactioN_TYPE_ID,
-                                TransactionDesc = item.TransactioN_DESC,
+                                TransactionDesc = item.TransactioN_DESC?.Trim() ?? "", // ✅ TRIM
                                 LastUpdated = DateTime.Now
                             });
                         }
@@ -155,8 +155,31 @@ namespace C2B_FBR_Connect.Services
                     };
                 }
 
-                var fbrBody = BuildFBRPayload(invoice);
-                var json = JsonConvert.SerializeObject(fbrBody, Formatting.Indented);
+                // Build and enrich the payload
+                var enrichedPayload = BuildFBRPayload(invoice);
+
+                // Convert to API format with correct property names
+                var apiPayload = ConvertToApiPayload(enrichedPayload);
+
+                // ✅ VALIDATE before sending
+                var validationErrors = ValidateFBRPayload(apiPayload);
+                if (validationErrors.Count > 0)
+                {
+                    return new FBRResponse
+                    {
+                        Success = false,
+                        ErrorMessage = "Validation failed: " + string.Join("; ", validationErrors),
+                        ResponseData = string.Join("\n", validationErrors)
+                    };
+                }
+
+                // Serialize to JSON
+                var json = JsonConvert.SerializeObject(apiPayload, Formatting.Indented);
+
+                Console.WriteLine($"\n📤 Sending to FBR API:");
+                Console.WriteLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+                Console.WriteLine(json);
+                Console.WriteLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
                 var request = new HttpRequestMessage(HttpMethod.Post, $"{_baseUrl}postinvoicedata_sb")
                 {
@@ -276,6 +299,200 @@ namespace C2B_FBR_Connect.Services
             }
         }
 
+        public async Task<List<SaleTypeRate>> FetchSaleTypeRatesAsync(string date, int transTypeId, int provinceId, string authToken = null)
+        {
+            var rates = new List<SaleTypeRate>();
+
+            if (string.IsNullOrWhiteSpace(authToken))
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ Auth token is missing for FetchSaleTypeRatesAsync");
+                return rates;
+            }
+
+            string url = $"https://gw.fbr.gov.pk/pdi/v2/SaleTypeToRate?date={date}&transTypeId={transTypeId}&originationSupplier={provinceId}";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ FetchSaleTypeRates failed: {response.StatusCode} - {json}");
+                    return rates;
+                }
+
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                rates = System.Text.Json.JsonSerializer.Deserialize<List<SaleTypeRate>>(json, options) ?? new List<SaleTypeRate>();
+                System.Diagnostics.Debug.WriteLine($"✅ Fetched {rates.Count} rates for transTypeId={transTypeId}, province={provinceId}");
+
+                return rates;
+            }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Network error in FetchSaleTypeRates: {ex.Message}");
+                return rates;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error in FetchSaleTypeRates: {ex.Message}");
+                return rates;
+            }
+        }
+
+        public async Task<SroSchedule> FetchSroScheduleAsync(int rateId, string date, int provinceId, string authToken = null)
+        {
+            if (string.IsNullOrWhiteSpace(authToken))
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ Auth token is missing for FetchSroScheduleAsync");
+                return null;
+            }
+
+            string url = $"https://gw.fbr.gov.pk/pdi/v1/SroSchedule?rate_id={rateId}&date={date}&origination_supplier_csv={provinceId}";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ FetchSroSchedule failed: {response.StatusCode} - {json}");
+                    return null;
+                }
+
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var schedules = System.Text.Json.JsonSerializer.Deserialize<List<SroSchedule>>(json, options);
+
+                if (schedules != null && schedules.Count > 0)
+                {
+                    var schedule = schedules.First();
+                    System.Diagnostics.Debug.WriteLine($"✅ Fetched SRO Schedule: {schedule.SRO_DESC} (ID: {schedule.SRO_ID})");
+                    return schedule;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"⚠️ No SRO Schedule found for rateId={rateId}");
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Network error in FetchSroSchedule: {ex.Message}");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error in FetchSroSchedule: {ex.Message}");
+                return null;
+            }
+        }
+
+        public async Task<string> FetchSroItemSerialNoAsync(int sroId, string date, string authToken = null)
+        {
+            if (string.IsNullOrWhiteSpace(authToken))
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ Auth token is missing for FetchSroItemSerialNoAsync");
+                return null;
+            }
+
+            // ✅ CONVERT DATE FORMAT: "31-Oct2025" → "2025-10-31"
+            string formattedDate = date;
+            try
+            {
+                // Parse the incoming date format (e.g., "31-Oct2025")
+                DateTime parsedDate = DateTime.ParseExact(date, "dd-MMMyyyy", System.Globalization.CultureInfo.InvariantCulture);
+                // Convert to required API format "yyyy-MM-dd"
+                formattedDate = parsedDate.ToString("yyyy-MM-dd");
+                System.Diagnostics.Debug.WriteLine($"📅 Date converted: {date} → {formattedDate}");
+            }
+            catch (FormatException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"⚠️ Date parsing failed for '{date}': {ex.Message}");
+                // Try alternate format if parsing fails
+                if (DateTime.TryParse(date, out DateTime fallbackDate))
+                {
+                    formattedDate = fallbackDate.ToString("yyyy-MM-dd");
+                    System.Diagnostics.Debug.WriteLine($"📅 Date converted (fallback): {date} → {formattedDate}");
+                }
+            }
+
+            string url = $"https://gw.fbr.gov.pk/pdi/v2/SROItem?date={formattedDate}&sro_id={sroId}";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+
+                System.Diagnostics.Debug.WriteLine($"📤 Request URL: {url}");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ FetchSroItemSerialNo failed: {response.StatusCode} - {json}");
+                    return null;
+                }
+
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var items = System.Text.Json.JsonSerializer.Deserialize<List<SroItem>>(json, options);
+
+                if (items != null && items.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"📋 Found {items.Count} SRO item(s) for sroId={sroId}");
+
+                    foreach (var item in items)
+                    {
+                        if (!string.IsNullOrWhiteSpace(item.SRO_ITEM_DESC) &&
+                            item.SRO_ITEM_DESC != "0" &&
+                            item.SRO_ITEM_DESC.Trim().Length > 0)
+                        {
+                            string serialNo = item.SRO_ITEM_DESC.Trim();
+                            System.Diagnostics.Debug.WriteLine($"✅ Selected SRO Item Serial No: {serialNo}");
+                            return serialNo;
+                        }
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"⚠️ All {items.Count} SRO items have empty descriptions");
+                    return null;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"⚠️ No SRO Items found for sroId={sroId}");
+                return null;
+            }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Network error in FetchSroItemSerialNo: {ex.Message}");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error in FetchSroItemSerialNo: {ex.Message}");
+                return null;
+            }
+        }
 
         private class FbrUomItem
         {
@@ -425,47 +642,296 @@ namespace C2B_FBR_Connect.Services
             }
         }
 
-        public object BuildFBRPayload(FBRInvoicePayload invoice)
+        public FBRInvoicePayload BuildFBRPayload(FBRInvoicePayload details)
         {
-            string scenarioId = invoice.BuyerRegistrationType?.Equals("Registered", StringComparison.OrdinalIgnoreCase) == true
-                ? "SN001"
-                : "SN002";
 
-            return new
+            // Determine scenario ID based on sale types in items
+            string scenarioId = DetermineScenarioFromItems(details.Items, details.BuyerRegistrationType);
+
+            details.ScenarioId = scenarioId;
+
+            // Process each item
+            foreach (var item in details.Items)
             {
-                invoiceType = invoice.InvoiceType,
-                invoiceDate = invoice.InvoiceDate.ToString("yyyy-MM-dd"),
-                sellerNTNCNIC = invoice.SellerNTN,
-                sellerBusinessName = invoice.SellerBusinessName,
-                sellerProvince = invoice.SellerProvince,
-                sellerAddress = invoice.SellerAddress,
-                buyerNTNCNIC = invoice.CustomerNTN,
-                buyerBusinessName = invoice.CustomerName,
-                buyerProvince = invoice.BuyerProvince,
-                buyerAddress = invoice.BuyerAddress,
-                buyerRegistrationType = invoice.BuyerRegistrationType,
-                invoiceRefNo = "",
-                scenarioId = scenarioId,
-                items = invoice.Items?.Select(item => new
+                // Auto-fill SRO defaults if needed
+                ScenarioMapper.AutoFillSroDefaults(item);
+
+                // Ensure sale type is set
+                if (string.IsNullOrEmpty(item.SaleType))
                 {
-                    hsCode = item.HSCode,
-                    productDescription = item.ItemName,
-                    rate = $"{item.TaxRate}%",
-                    uoM = item.UnitOfMeasure,
-                    quantity = item.Quantity,
-                    totalValues = item.TotalValue,
-                    valueSalesExcludingST = item.TotalPrice,
-                    fixedNotifiedValueOrRetailPrice = item.RetailPrice,
-                    salesTaxApplicable = item.SalesTaxAmount,
-                    extraTax = item.ExtraTax,
-                    furtherTax = item.FurtherTax,
-                    discount = item.Discount,
-                    fedPayable = 0.00,
-                    salesTaxWithheldAtSource = 0.00,
-                    saleType = "Goods at standard rate (default)"
-                }).ToList()
-            };
+                    item.SaleType = "Goods at Standard Rate (default)";
+                }
+            }
+
+            return details;
         }
+
+        private string DetermineScenarioFromItems(List<InvoiceItem> items, string buyerRegistrationType)
+        {
+            if (items == null || items.Count == 0)
+                return "SN001";
+
+            // Get distinct scenarios based on sale types
+            var scenarios = items
+                .Where(i => !string.IsNullOrEmpty(i.SaleType))
+                .Select(i => ScenarioMapper.DetermineScenarioId(i.SaleType, buyerRegistrationType))
+                .Distinct()
+                .ToList();
+
+            if (scenarios.Count == 0)
+                return "SN001";
+
+            // Prioritize special scenarios
+            var specialScenario = scenarios.FirstOrDefault(s => s != "SN001" && s != "SN002");
+            if (specialScenario != null)
+                return specialScenario;
+
+            return scenarios.First();
+        }
+
+        private List<string> ValidatePayload(FBRInvoicePayload payload)
+        {
+            var errors = new List<string>();
+
+            // Validate SRO and item-level data
+            foreach (var item in payload.Items)
+            {
+                var itemValidation = ScenarioMapper.ValidateSroData(item);
+                if (!itemValidation.IsValid)
+                {
+                    errors.AddRange(itemValidation.Errors);
+                }
+            }
+
+            // Validate scenario and registration type
+            if (string.IsNullOrEmpty(payload.ScenarioId))
+                errors.Add("Scenario ID is required");
+
+            if (string.IsNullOrEmpty(payload.BuyerRegistrationType))
+                errors.Add("Buyer Registration Type is required");
+
+            return errors;
+        }
+
+        public FBRApiPayload ConvertToApiPayload(FBRInvoicePayload details)
+        {
+            Console.WriteLine($"\n🔄 Converting to FBR API Payload format...");
+            Console.WriteLine($"   Invoice: {details.InvoiceNumber}");
+            Console.WriteLine($"   Items: {details.Items?.Count ?? 0}");
+
+            var apiPayload = new FBRApiPayload
+            {
+                InvoiceType = "Sale Invoice",
+                InvoiceDate = details.InvoiceDate.ToString("yyyy-MM-dd"),
+                SellerBusinessName = details.SellerBusinessName ?? "",
+                SellerProvince = details.SellerProvince ?? "",
+                SellerNTNCNIC = details.SellerNTN ?? "",
+                SellerAddress = details.SellerAddress ?? "",
+                BuyerNTNCNIC = details.CustomerNTN ?? "",
+                BuyerBusinessName = details.CustomerName ?? "",
+                BuyerProvince = details.BuyerProvince ?? "",
+                BuyerAddress = details.BuyerAddress ?? "",
+                InvoiceRefNo = "",
+                ScenarioId = details.ScenarioId ?? "SN001",
+                BuyerRegistrationType = details.BuyerRegistrationType ?? "Registered",
+                Items = new List<FBRApiItem>()
+            };
+
+            if (details.Items != null)
+            {
+                Console.WriteLine($"\n   📦 Converting {details.Items.Count} items:");
+
+                foreach (var item in details.Items)
+                {
+                    // ✅ CRITICAL VALIDATION: Ensure NetAmount is positive
+                    decimal valueSalesExcludingST = Math.Max(item.NetAmount, item.TotalPrice);
+
+                    if (valueSalesExcludingST <= 0)
+                    {
+                        Console.WriteLine($"      ⚠️ WARNING: Item '{item.ItemName}' has invalid NetAmount={item.NetAmount}");
+                        Console.WriteLine($"         Using TotalPrice={item.TotalPrice} as fallback");
+                        valueSalesExcludingST = Math.Abs(item.TotalPrice);
+                    }
+
+                    // ✅ Ensure TotalValues is also positive
+                    decimal totalValues = Math.Max(item.TotalValue, valueSalesExcludingST + item.SalesTaxAmount);
+
+                    Console.WriteLine($"      ✅ {item.ItemName}");
+                    Console.WriteLine($"         valueSalesExcludingST: {valueSalesExcludingST}");
+                    Console.WriteLine($"         totalValues: {totalValues}");
+                    Console.WriteLine($"         quantity: {item.Quantity}");
+                    Console.WriteLine($"         rate: {item.TaxRate}%");
+                    Console.WriteLine($"         saleType: {item.SaleType}");
+
+                    var apiItem = new FBRApiItem
+                    {
+                        HsCode = item.HSCode ?? "",
+                        ProductDescription = item.ItemName ?? "",
+                        Rate = item.Rate,
+                        UoM = item.UnitOfMeasure ?? "",
+                        Quantity = item.Quantity,
+
+                        // ✅ CRITICAL: These must be positive, non-zero values
+                        ValueSalesExcludingST = valueSalesExcludingST,
+                        TotalValues = totalValues,
+
+                        FixedNotifiedValueOrRetailPrice = item.RetailPrice,
+                        SalesTaxApplicable = item.SalesTaxAmount,
+                        SalesTaxWithheldAtSource = item.SalesTaxWithheldAtSource,
+                        ExtraTax = item.ExtraTax > 0 ? item.ExtraTax.ToString() : "",
+                        FurtherTax = item.FurtherTax,
+                        SroScheduleNo = item.SroScheduleNo ?? "",
+                        FedPayable = item.FedPayable,
+                        Discount = item.Discount,
+                        SaleType = item.SaleType ?? "Goods at standard rate (default)",
+                        SroItemSerialNo = item.SroItemSerialNo ?? ""
+                    };
+
+                    apiPayload.Items.Add(apiItem);
+                }
+            }
+
+            Console.WriteLine($"✅ Conversion complete\n");
+            return apiPayload;
+        }
+        public List<string> ValidateFBRPayload(FBRApiPayload payload)
+        {
+            var errors = new List<string>();
+
+            Console.WriteLine($"\n🔍 Validating FBR Payload...");
+
+            if (string.IsNullOrEmpty(payload.SellerNTNCNIC))
+                errors.Add("Seller NTN is required");
+
+            if (payload.Items == null || payload.Items.Count == 0)
+                errors.Add("At least one item is required");
+
+            if (payload.Items != null)
+            {
+                for (int i = 0; i < payload.Items.Count; i++)
+                {
+                    var item = payload.Items[i];
+                    string itemPrefix = $"Item {i + 1} ({item.ProductDescription})";
+
+                    if (item.Quantity <= 0)
+                        errors.Add($"{itemPrefix}: Quantity must be greater than 0");
+
+                    if (item.ValueSalesExcludingST <= 0)
+                        errors.Add($"{itemPrefix}: valueSalesExcludingST must be greater than 0 (currently: {item.ValueSalesExcludingST})");
+
+                    if (item.TotalValues <= 0)
+                        errors.Add($"{itemPrefix}: totalValues must be greater than 0 (currently: {item.TotalValues})");
+
+                    if (string.IsNullOrEmpty(item.SaleType))
+                        errors.Add($"{itemPrefix}: Sale Type is required");
+
+                    // ✅ CRITICAL: Validate SRO for non-18% rates (FBR Error 0077)
+                    decimal taxRate = 18m; // default
+                    if (!string.IsNullOrEmpty(item.Rate))
+                    {
+                        string rateStr = item.Rate.Replace("%", "").Trim();
+                        decimal.TryParse(rateStr, out taxRate);
+                    }
+
+                    if (taxRate != 18m)
+                    {
+                        if (string.IsNullOrWhiteSpace(item.SroScheduleNo))
+                            errors.Add($"{itemPrefix}: SRO Schedule Number is required for rate {taxRate}% (Error 0077)");
+
+                        if (string.IsNullOrWhiteSpace(item.SroItemSerialNo))
+                            errors.Add($"{itemPrefix}: SRO Item Serial Number is required for rate {taxRate}% (Error 0077)");
+                    }
+
+                    // ✅ Validate that schedule and serial are paired correctly (FBR Error 0078)
+                    bool hasSchedule = !string.IsNullOrWhiteSpace(item.SroScheduleNo);
+                    bool hasSerial = !string.IsNullOrWhiteSpace(item.SroItemSerialNo);
+
+                    if (hasSchedule && !hasSerial)
+                        errors.Add($"{itemPrefix}: SRO Schedule provided but Serial Number missing (Error 0078)");
+
+                    if (!hasSchedule && hasSerial)
+                        errors.Add($"{itemPrefix}: SRO Serial Number provided but Schedule missing");
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                Console.WriteLine($"❌ Validation failed with {errors.Count} error(s):");
+                foreach (var error in errors)
+                {
+                    Console.WriteLine($"   - {error}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"✅ Validation passed");
+            }
+
+            return errors;
+        }
+        public async Task<List<SroSchedule>> FetchAllSroSchedulesAsync(int rateId, string date, int provinceId, string authToken = null)
+        {
+            if (string.IsNullOrWhiteSpace(authToken))
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ Auth token is missing for FetchAllSroSchedulesAsync");
+                return new List<SroSchedule>();
+            }
+
+            string url = $"https://gw.fbr.gov.pk/pdi/v1/SroSchedule?rate_id={rateId}&date={date}&origination_supplier_csv={provinceId}";
+
+            try
+            {
+                var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", authToken.Trim());
+                request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
+                request.Headers.TryAddWithoutValidation("User-Agent", "C2B_FBR_Connect/1.0");
+
+                var response = await _httpClient.SendAsync(request);
+                var json = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    System.Diagnostics.Debug.WriteLine($"❌ FetchAllSroSchedules failed: {response.StatusCode} - {json}");
+                    return new List<SroSchedule>();
+                }
+
+                var options = new System.Text.Json.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var schedules = System.Text.Json.JsonSerializer.Deserialize<List<SroSchedule>>(json, options);
+
+                if (schedules != null && schedules.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"📋 Found {schedules.Count} SRO Schedule(s) for rateId={rateId}");
+
+                    // Log all schedules for debugging
+                    foreach (var schedule in schedules)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"   - {schedule.SRO_DESC} (ID: {schedule.SRO_ID})");
+                    }
+
+                    return schedules;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"⚠️ No SRO Schedule found for rateId={rateId}");
+                return new List<SroSchedule>();
+            }
+            catch (HttpRequestException ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Network error in FetchAllSroSchedules: {ex.Message}");
+                return new List<SroSchedule>();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Error in FetchAllSroSchedules: {ex.Message}");
+                return new List<SroSchedule>();
+            }
+        }
+
+
+
 
         public void Dispose()
         {

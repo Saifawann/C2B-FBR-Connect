@@ -14,7 +14,11 @@ namespace C2B_FBR_Connect.Models
 
     // ✅ Main payload structure for FBR invoice upload
     public class FBRInvoicePayload
+
     {
+        public string ScenarioId { get; set; } = "SN001"; 
+        public string BuyerRegistrationType { get; set; } = "Registered";
+
         // Basic invoice details
         public string InvoiceNumber { get; set; }
         public DateTime InvoiceDate { get; set; }
@@ -32,7 +36,7 @@ namespace C2B_FBR_Connect.Models
         public string BuyerProvince { get; set; }
         public string BuyerAddress { get; set; }
         public string BuyerPhone { get; set; }
-        public string BuyerRegistrationType { get; set; } // "Registered" or "Unregistered"
+        public string BuyerEmail { get; set; }
 
         // Financial summary
         public decimal Subtotal { get; set; }       // Amount before tax
