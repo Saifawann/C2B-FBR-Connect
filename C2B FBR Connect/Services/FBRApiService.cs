@@ -783,7 +783,7 @@ namespace C2B_FBR_Connect.Services
                         SroScheduleNo = item.SroScheduleNo ?? "",
                         FedPayable = item.FedPayable,
                         Discount = item.Discount,
-                        SaleType = item.SaleType ?? "Goods at standard rate (default)",
+                        SaleType = ScenarioMapper.NormalizeSaleType(item.SaleType) ?? "Goods at standard rate (default)", // ✅ NORMALIZE
                         SroItemSerialNo = item.SroItemSerialNo ?? ""
                     };
 
@@ -833,8 +833,11 @@ namespace C2B_FBR_Connect.Services
                         decimal.TryParse(rateStr, out taxRate);
                     }
 
-                    if (taxRate != 18m)
+                    String[] ignoredSaleTypes = ["Processing/Conversion of Goods", "Goods (FED in ST Mode)", "Telecommunication services", "Services (FED in ST Mode)"];
+
+                    if (taxRate != 18m && !ignoredSaleTypes.Contains(item.SaleType))
                     {
+                           
                         if (string.IsNullOrWhiteSpace(item.SroScheduleNo))
                             errors.Add($"{itemPrefix}: SRO Schedule Number is required for rate {taxRate}% (Error 0077)");
 

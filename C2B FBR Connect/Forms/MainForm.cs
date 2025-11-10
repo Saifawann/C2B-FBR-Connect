@@ -33,6 +33,8 @@ namespace C2B_FBR_Connect.Forms
         private readonly InvoiceManager _invoiceManager;
         private readonly TransactionTypeService _transactionTypeService;
         private readonly SroDataService _sroDataService;
+        private InvoiceTrackingService _trackingService;
+        private bool _excludeUploadedInvoices = true; 
 
         private Company _currentCompany;
         private List<Invoice> _allInvoices;
