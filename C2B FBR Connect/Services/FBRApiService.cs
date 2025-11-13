@@ -744,7 +744,7 @@ namespace C2B_FBR_Connect.Services
                 foreach (var item in details.Items)
                 {
                     // ✅ CRITICAL VALIDATION: Ensure NetAmount is positive
-                    decimal valueSalesExcludingST = Math.Max(item.NetAmount, item.TotalPrice);
+                    decimal valueSalesExcludingST = item.NetAmount;
 
                     if (valueSalesExcludingST <= 0)
                     {
@@ -754,7 +754,7 @@ namespace C2B_FBR_Connect.Services
                     }
 
                     // ✅ Ensure TotalValues is also positive
-                    decimal totalValues = Math.Max(item.TotalValue, valueSalesExcludingST + item.SalesTaxAmount);
+                    decimal totalValues = item.TotalValue;
 
                     Console.WriteLine($"      ✅ {item.ItemName}");
                     Console.WriteLine($"         valueSalesExcludingST: {valueSalesExcludingST}");

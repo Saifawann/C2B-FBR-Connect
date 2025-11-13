@@ -21,8 +21,8 @@ namespace C2B_FBR_Connect.Services
         {
             _dbPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "FBRInvoicing",
-                "fbr_invoicing.db"
+                "C2b Smart App",
+                "c2b_smart_app.db"
             );
 
             var dir = Path.GetDirectoryName(_dbPath);

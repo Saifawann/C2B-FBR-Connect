@@ -3,6 +3,8 @@ using C2B_FBR_Connect.Models;
 using C2B_FBR_Connect.Services;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
+using System.Diagnostics.Metrics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -189,9 +191,6 @@ namespace C2B_FBR_Connect.Forms
 
             btnUploadSelected = CreateButton("Upload Selected", ref currentX, btnY, 130, Color.FromArgb(255, 152, 0), btnSpacing);
             btnUploadSelected.Click += BtnUploadSelected_Click;
-
-            btnUploadAll = CreateButton("Upload All", ref currentX, btnY, 100, Color.FromArgb(255, 87, 34), btnSpacing);
-            btnUploadAll.Click += BtnUploadAll_Click;
 
             btnGeneratePDF = CreateButton("Generate PDF", ref currentX, btnY, 120, Color.FromArgb(156, 39, 176), btnSpacing);
             btnGeneratePDF.Click += BtnGeneratePDF_Click;
@@ -469,7 +468,7 @@ namespace C2B_FBR_Connect.Forms
             var columnsToHide = new[] {
                 "Id", "QuickBooksInvoiceId", "CompanyName", "FBR_QRCode", "CreatedDate", "ModifiedDate",
                 "CustomerAddress", "CustomerPhone", "CustomerEmail", "TotalAmount", "TaxAmount",
-                "DiscountAmount", "InvoiceDate", "PaymentMode", "Items"
+                "DiscountAmount", "InvoiceDate", "PaymentMode", "Items", "CustomerType"
             };
 
             foreach (var col in columnsToHide)
@@ -479,18 +478,19 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
+
         private void ConfigureVisibleColumns()
         {
             var columnConfig = new Dictionary<string, (string Header, int Weight, string Format, DataGridViewContentAlignment? Alignment)>
             {
-                ["InvoiceNumber"] = ("Invoice #", 15, null, null),
-                ["CustomerName"] = ("Customer", 25, null, null),
-                ["CustomerNTN"] = ("NTN/CNIC", 18, null, null),
-                ["Amount"] = ("Amount", 12, "N2", DataGridViewContentAlignment.MiddleRight),
-                ["Status"] = ("Status", 10, null, DataGridViewContentAlignment.MiddleCenter),
-                ["FBR_IRN"] = ("FBR IRN", 20, null, null),
-                ["UploadDate"] = ("Upload Date", 18, "dd-MMM-yyyy HH:mm", null),
-                ["ErrorMessage"] = ("Error", 30, null, null)
+                ["InvoiceNumber"] = ("Invoice #", 12, null, null),
+                ["CustomerName"] = ("Customer", 22, null, null),
+                ["CustomerNTN"] = ("NTN/CNIC", 15, null, null),
+                ["Amount"] = ("Amount", 10, "N2", DataGridViewContentAlignment.MiddleRight),
+                ["Status"] = ("Status", 8, null, DataGridViewContentAlignment.MiddleCenter),
+                ["FBR_IRN"] = ("FBR IRN", 18, null, null),
+                ["UploadDate"] = ("Upload Date", 15, "dd-MMM-yyyy HH:mm", null),
+                ["ErrorMessage"] = ("Error", 25, null, null)
             };
 
             foreach (var config in columnConfig)
