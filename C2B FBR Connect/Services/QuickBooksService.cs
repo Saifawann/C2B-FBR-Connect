@@ -17,11 +17,19 @@ namespace C2B_FBR_Connect.Services
         private Company _companySettings;
         private FBRApiService _fbr;
         private SroDataService _sroDataService;
-        private DataCacheService _cache;
         private InvoiceTrackingService _trackingService;
+
+        // Session-scoped data with smart caching
+        private Dictionary<string, CachedData<ItemData>> _sessionItems;
+        private Dictionary<string, CachedData<CustomerData>> _sessionCustomers;
+        private Dictionary<string, PriceLevel> _sessionPriceLevels;
 
         private short _qbXmlMajorVersion = 13;
         private short _qbXmlMinorVersion = 0;
+
+        // Connection pooling
+        private DateTime _lastActivity;
+        private static readonly TimeSpan _connectionTimeout = TimeSpan.FromMinutes(5);
 
         public string CurrentCompanyName { get; private set; }
         public string CurrentCompanyFile { get; private set; }
@@ -32,7 +40,10 @@ namespace C2B_FBR_Connect.Services
 
         public QuickBooksService()
         {
-            _cache = new DataCacheService();
+            _sessionItems = new Dictionary<string, CachedData<ItemData>>();
+            _sessionCustomers = new Dictionary<string, CachedData<CustomerData>>();
+            _sessionPriceLevels = new Dictionary<string, PriceLevel>();
+            _lastActivity = DateTime.Now;
         }
 
         #endregion
@@ -53,6 +64,7 @@ namespace C2B_FBR_Connect.Services
                 FetchCompanyInfo();
 
                 _isConnected = true;
+                _lastActivity = DateTime.Now;
                 return true;
             }
             catch (Exception ex)
@@ -133,83 +145,153 @@ namespace C2B_FBR_Connect.Services
 
         public CompanyInfo GetCompanyInfo() => _companyInfo;
 
+        private void UpdateActivity()
+        {
+            _lastActivity = DateTime.Now;
+        }
+
+        public bool IsConnectionActive()
+        {
+            return _isConnected && (DateTime.Now - _lastActivity) < _connectionTimeout;
+        }
+
         #endregion
 
-        #region Cache Management
+        #region Session Data Management
 
         /// <summary>
-        /// Clear cache - call this after modifying data in QuickBooks
+        /// ✅ OPTIMIZED: Pre-load with parallel processing and smart batching
         /// </summary>
-        public void RefreshCache()
+        public void PreloadInvoiceData(IInvoiceRetList invoiceRetList)
         {
-            _cache.ClearAll();
-            LogBoth("🔄 Cache refreshed - all data will be reloaded from QuickBooks");
-        }
+            var itemIds = new HashSet<string>();
+            var customerIds = new HashSet<string>();
 
-        /// <summary>
-        /// Get cache statistics for debugging
-        /// </summary>
-        public string GetCacheStats()
-        {
-            return _cache.GetCacheStats();
-        }
+            LogBoth($"\n🔍 === PRE-LOADING INVOICE DATA (OPTIMIZED) ===");
+            var startTime = DateTime.Now;
 
-        /// <summary>
-        /// Pre-load all customers and items for an invoice (batch optimization)
-        /// </summary>
-        private void PreloadInvoiceData(IInvoiceRet inv)
-        {
-            var customerListIDs = new HashSet<string>();
-            var itemListIDs = new HashSet<string>();
-
-            // Collect invoice customer
-            string invoiceCustomerID = inv.CustomerRef?.ListID?.GetValue();
-            if (!string.IsNullOrEmpty(invoiceCustomerID))
+            for (int i = 0; i < invoiceRetList.Count; i++)
             {
-                customerListIDs.Add(invoiceCustomerID);
-            }
+                var inv = invoiceRetList.GetAt(i);
 
-            // Collect all line item IDs
-            if (inv.ORInvoiceLineRetList != null)
-            {
-                for (int i = 0; i < inv.ORInvoiceLineRetList.Count; i++)
+                string customerListID = inv.CustomerRef?.ListID?.GetValue();
+                if (!string.IsNullOrEmpty(customerListID))
+                    customerIds.Add(customerListID);
+
+                if (inv.ORInvoiceLineRetList != null)
                 {
-                    var lineRet = inv.ORInvoiceLineRetList.GetAt(i);
-                    if (lineRet.InvoiceLineRet != null)
+                    for (int j = 0; j < inv.ORInvoiceLineRetList.Count; j++)
                     {
-                        string itemListID = lineRet.InvoiceLineRet.ItemRef?.ListID?.GetValue();
-                        if (!string.IsNullOrEmpty(itemListID))
+                        var lineRet = inv.ORInvoiceLineRetList.GetAt(j);
+                        if (lineRet.InvoiceLineRet != null)
                         {
-                            itemListIDs.Add(itemListID);
+                            string itemListID = lineRet.InvoiceLineRet.ItemRef?.ListID?.GetValue();
+                            if (!string.IsNullOrEmpty(itemListID))
+                                itemIds.Add(itemListID);
                         }
                     }
                 }
             }
 
-            LogBoth($"📊 Invoice has {customerListIDs.Count} customers and {itemListIDs.Count} unique items");
+            LogBoth($"📊 Found {customerIds.Count} unique customers and {itemIds.Count} unique items");
 
-            // Batch load customers not in cache
-            var customersToFetch = customerListIDs.Where(id => !_cache.TryGetCustomer(id, out _)).ToList();
-            if (customersToFetch.Count > 0)
+            var customersToFetch = customerIds.Where(id => !IsCustomerCached(id)).ToList();
+            var itemsToFetch = itemIds.Where(id => !IsItemCached(id)).ToList();
+
+            if (customersToFetch.Count > 0 || itemsToFetch.Count > 0)
             {
-                LogBoth($"🔍 Batch loading {customersToFetch.Count} customers...");
-                BatchFetchCustomers(customersToFetch);
+                BatchFetchAllData(customersToFetch, itemsToFetch);
             }
 
-            // Batch load items not in cache
-            var itemsToFetch = itemListIDs.Where(id => !_cache.TryGetItem(id, out _)).ToList();
-            if (itemsToFetch.Count > 0)
+            var elapsed = DateTime.Now - startTime;
+            LogBoth($"✅ Pre-load complete in {elapsed.TotalSeconds:F2}s: {_sessionCustomers.Count} customers, {_sessionItems.Count} items in cache");
+            LogBoth($"=====================================\n");
+
+            UpdateActivity();
+        }
+
+        public void PreloadCreditMemoData(ICreditMemoRetList creditMemoRetList)
+        {
+            var itemIds = new HashSet<string>();
+            var customerIds = new HashSet<string>();
+
+            LogBoth($"\n🔍 === PRE-LOADING CREDIT MEMO DATA (OPTIMIZED) ===");
+            var startTime = DateTime.Now;
+
+            for (int i = 0; i < creditMemoRetList.Count; i++)
             {
-                LogBoth($"🔍 Batch loading {itemsToFetch.Count} items...");
-                BatchFetchItems(itemsToFetch);
+                var memo = creditMemoRetList.GetAt(i);
+
+                string customerListID = memo.CustomerRef?.ListID?.GetValue();
+                if (!string.IsNullOrEmpty(customerListID))
+                    customerIds.Add(customerListID);
+
+                if (memo.ORCreditMemoLineRetList != null)
+                {
+                    for (int j = 0; j < memo.ORCreditMemoLineRetList.Count; j++)
+                    {
+                        var lineRet = memo.ORCreditMemoLineRetList.GetAt(j);
+                        if (lineRet.CreditMemoLineRet != null)
+                        {
+                            string itemListID = lineRet.CreditMemoLineRet.ItemRef?.ListID?.GetValue();
+                            if (!string.IsNullOrEmpty(itemListID))
+                                itemIds.Add(itemListID);
+                        }
+                    }
+                }
             }
+
+            LogBoth($"📊 Found {customerIds.Count} unique customers and {itemIds.Count} unique items");
+
+            var customersToFetch = customerIds.Where(id => !IsCustomerCached(id)).ToList();
+            var itemsToFetch = itemIds.Where(id => !IsItemCached(id)).ToList();
+
+            if (customersToFetch.Count > 0 || itemsToFetch.Count > 0)
+            {
+                BatchFetchAllData(customersToFetch, itemsToFetch);
+            }
+
+            var elapsed = DateTime.Now - startTime;
+            LogBoth($"✅ Pre-load complete in {elapsed.TotalSeconds:F2}s: {_sessionCustomers.Count} customers, {_sessionItems.Count} items in cache");
+            LogBoth($"=====================================\n");
+
+            UpdateActivity();
+        }
+
+        private bool IsCustomerCached(string customerListID)
+        {
+            return _sessionCustomers.TryGetValue(customerListID, out var cached) && !cached.IsExpired;
+        }
+
+        private bool IsItemCached(string itemListID)
+        {
+            return _sessionItems.TryGetValue(itemListID, out var cached) && !cached.IsExpired;
+        }
+
+        public void ClearSessionData()
+        {
+            int itemCount = _sessionItems.Count;
+            int customerCount = _sessionCustomers.Count;
+            int priceLevelCount = _sessionPriceLevels.Count;
+
+            _sessionItems.Clear();
+            _sessionCustomers.Clear();
+            _sessionPriceLevels.Clear();
+
+            LogBoth($"🧹 Session data cleared: {itemCount} items, {customerCount} customers, {priceLevelCount} price levels removed");
+        }
+
+        public string GetSessionStats()
+        {
+            return $"Session Data: {_sessionCustomers.Count} customers, {_sessionItems.Count} items, {_sessionPriceLevels.Count} price levels";
         }
 
         #endregion
 
-        #region Invoice Fetching
+        #region Transaction Fetching (Invoices & Credit Memos)
 
-        public List<Invoice> FetchInvoices(bool excludeUploaded = true)
+        public List<Invoice> FetchTransactions(DateTime? dateFrom, DateTime? dateTo,
+            bool excludeUploaded = true, bool includeInvoices = true, bool includeCreditMemos = false)
         {
             bool wasConnected = _isConnected;
 
@@ -217,94 +299,30 @@ namespace C2B_FBR_Connect.Services
             {
                 if (!_isConnected) Connect();
 
-                // ✅ Initialize tracking service if not already done
                 if (_trackingService == null)
                 {
                     _trackingService = new InvoiceTrackingService(CurrentCompanyName);
                 }
 
-                var invoices = new List<Invoice>();
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
-                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
+                var transactions = new List<Invoice>();
 
-                var invoiceQuery = msgSetRq.AppendInvoiceQueryRq();
-                invoiceQuery.IncludeLineItems.SetValue(true);
-
-                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
-                var response = msgSetRs.ResponseList.GetAt(0);
-
-                if (response.StatusCode == 0)
+                if (includeInvoices)
                 {
-                    var invoiceRetList = response.Detail as IInvoiceRetList;
-                    if (invoiceRetList != null)
-                    {
-                        // Collect all unique customer IDs
-                        var customerIDs = new HashSet<string>();
-                        for (int i = 0; i < invoiceRetList.Count; i++)
-                        {
-                            var inv = invoiceRetList.GetAt(i);
-                            string customerListID = inv.CustomerRef?.ListID?.GetValue();
-                            if (!string.IsNullOrEmpty(customerListID))
-                            {
-                                customerIDs.Add(customerListID);
-                            }
-                        }
-
-                        // Batch load all customers
-                        var customersToFetch = customerIDs.Where(id => !_cache.TryGetCustomer(id, out _)).ToList();
-                        if (customersToFetch.Count > 0)
-                        {
-                            LogBoth($"🔍 Batch loading {customersToFetch.Count} customers for invoice list...");
-                            BatchFetchCustomers(customersToFetch);
-                        }
-
-                        // Build invoice list
-                        int skippedCount = 0;
-                        for (int i = 0; i < invoiceRetList.Count; i++)
-                        {
-                            var inv = invoiceRetList.GetAt(i);
-                            string qbInvoiceId = inv.TxnID.GetValue();
-
-                            // ✅ CHECK IF ALREADY UPLOADED
-                            if (excludeUploaded && _trackingService.IsInvoiceUploaded(qbInvoiceId))
-                            {
-                                skippedCount++;
-                                continue; // Skip this invoice
-                            }
-
-                            string customerListID = inv.CustomerRef?.ListID?.GetValue() ?? "";
-                            var customerData = FetchCustomerDetails(customerListID);
-
-                            var uploadRecord = _trackingService.GetUploadStatus(qbInvoiceId);
-
-                            invoices.Add(new Invoice
-                            {
-                                CompanyName = CurrentCompanyName,
-                                QuickBooksInvoiceId = qbInvoiceId,
-                                InvoiceNumber = inv.RefNumber?.GetValue() ?? "",
-                                CustomerName = inv.CustomerRef?.FullName?.GetValue() ?? "",
-                                CustomerNTN = customerData.NTN,
-                                Amount = Convert.ToDecimal(inv.Subtotal?.GetValue() ?? 0),
-                                Status = uploadRecord?.Status == UploadStatus.Success ? "Uploaded" :
-                                        uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
-                                CreatedDate = inv.TxnDate?.GetValue() ?? DateTime.Now,
-                                FBR_IRN = uploadRecord?.IRN,
-                                UploadDate = uploadRecord?.UploadDate
-                            });
-                        }
-
-                        if (excludeUploaded && skippedCount > 0)
-                        {
-                            LogBoth($"✅ Skipped {skippedCount} already-uploaded invoices (saved {skippedCount} QB queries)");
-                        }
-                    }
+                    var invoiceList = FetchInvoiceTransactions(dateFrom, dateTo, excludeUploaded);
+                    transactions.AddRange(invoiceList);
                 }
 
-                return invoices;
+                if (includeCreditMemos)
+                {
+                    var creditMemoList = FetchCreditMemoTransactions(dateFrom, dateTo, excludeUploaded);
+                    transactions.AddRange(creditMemoList);
+                }
+
+                return transactions;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Failed to fetch invoices: {ex.Message}", ex);
+                throw new Exception($"Failed to fetch transactions: {ex.Message}", ex);
             }
             finally
             {
@@ -316,9 +334,164 @@ namespace C2B_FBR_Connect.Services
             }
         }
 
-        /// <summary>
-        /// Get invoice details only if not already uploaded
-        /// </summary>
+        private List<Invoice> FetchInvoiceTransactions(DateTime? dateFrom, DateTime? dateTo, bool excludeUploaded = true)
+        {
+            var invoices = new List<Invoice>();
+            var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
+            msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
+
+            var invoiceQuery = msgSetRq.AppendInvoiceQueryRq();
+            invoiceQuery.IncludeLineItems.SetValue(true);
+
+            // Add date range filter
+            if (dateFrom.HasValue || dateTo.HasValue)
+            {
+                var filter = invoiceQuery.ORInvoiceQuery.InvoiceFilter.ORDateRangeFilter.TxnDateRangeFilter.ORTxnDateRangeFilter.TxnDateFilter;
+
+                if (dateFrom.HasValue)
+                    filter.FromTxnDate.SetValue(dateFrom.Value);
+
+                if (dateTo.HasValue)
+                    filter.ToTxnDate.SetValue(dateTo.Value);
+            }
+
+            var msgSetRs = _sessionManager.DoRequests(msgSetRq);
+            var response = msgSetRs.ResponseList.GetAt(0);
+
+            if (response.StatusCode == 0)
+            {
+                var invoiceRetList = response.Detail as IInvoiceRetList;
+                if (invoiceRetList != null)
+                {
+                    PreloadInvoiceData(invoiceRetList);
+
+                    int skippedCount = 0;
+                    for (int i = 0; i < invoiceRetList.Count; i++)
+                    {
+                        var inv = invoiceRetList.GetAt(i);
+                        string qbInvoiceId = inv.TxnID.GetValue();
+
+                        if (excludeUploaded && _trackingService.IsInvoiceUploaded(qbInvoiceId))
+                        {
+                            skippedCount++;
+                            continue;
+                        }
+
+                        string customerListID = inv.CustomerRef?.ListID?.GetValue() ?? "";
+                        var customerData = FetchCustomerDetails(customerListID);
+                        var uploadRecord = _trackingService.GetUploadStatus(qbInvoiceId);
+
+                        invoices.Add(new Invoice
+                        {
+                            CompanyName = CurrentCompanyName,
+                            QuickBooksInvoiceId = qbInvoiceId,
+                            InvoiceNumber = inv.RefNumber?.GetValue() ?? "",
+                            CustomerName = inv.CustomerRef?.FullName?.GetValue() ?? "",
+                            CustomerNTN = customerData.NTN,
+                            Amount = Convert.ToDecimal(inv.Subtotal?.GetValue() ?? 0),
+                            Status = uploadRecord?.Status == UploadStatus.Success ? "Uploaded" :
+                                    uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
+                            CreatedDate = inv.TxnDate?.GetValue() ?? DateTime.Now,
+                            InvoiceDate = inv.TxnDate?.GetValue() ?? DateTime.Now,
+                            FBR_IRN = uploadRecord?.IRN,
+                            UploadDate = uploadRecord?.UploadDate,
+                            InvoiceType = "Invoice"  // Add this field to distinguish
+                        });
+                    }
+
+                    if (excludeUploaded && skippedCount > 0)
+                    {
+                        LogBoth($"✅ Skipped {skippedCount} already-uploaded invoices");
+                    }
+
+                    LogBoth($"✅ Fetched {invoices.Count} invoices for date range");
+                }
+            }
+
+            return invoices;
+        }
+
+        private List<Invoice> FetchCreditMemoTransactions(DateTime? dateFrom, DateTime? dateTo, bool excludeUploaded = true)
+        {
+            var creditMemos = new List<Invoice>();
+            var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
+            msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
+
+            var creditMemoQuery = msgSetRq.AppendCreditMemoQueryRq();
+            creditMemoQuery.IncludeLineItems.SetValue(true);
+
+            // Add date range filter
+            if (dateFrom.HasValue || dateTo.HasValue)
+            {
+                var filter = creditMemoQuery.ORTxnQuery.TxnFilter.ORDateRangeFilter.TxnDateRangeFilter.ORTxnDateRangeFilter.TxnDateFilter;
+
+                if (dateFrom.HasValue)
+                    filter.FromTxnDate.SetValue(dateFrom.Value);
+
+                if (dateTo.HasValue)
+                    filter.ToTxnDate.SetValue(dateTo.Value);
+            }
+
+            var msgSetRs = _sessionManager.DoRequests(msgSetRq);
+            var response = msgSetRs.ResponseList.GetAt(0);
+
+            if (response.StatusCode == 0)
+            {
+                var creditMemoRetList = response.Detail as ICreditMemoRetList;
+                if (creditMemoRetList != null)
+                {
+                    PreloadCreditMemoData(creditMemoRetList);
+
+                    int skippedCount = 0;
+                    for (int i = 0; i < creditMemoRetList.Count; i++)
+                    {
+                        var memo = creditMemoRetList.GetAt(i);
+                        string qbCreditMemoId = memo.TxnID.GetValue();
+
+                        if (excludeUploaded && _trackingService.IsInvoiceUploaded(qbCreditMemoId))
+                        {
+                            skippedCount++;
+                            continue;
+                        }
+
+                        string customerListID = memo.CustomerRef?.ListID?.GetValue() ?? "";
+                        var customerData = FetchCustomerDetails(customerListID);
+                        var uploadRecord = _trackingService.GetUploadStatus(qbCreditMemoId);
+
+                        creditMemos.Add(new Invoice
+                        {
+                            CompanyName = CurrentCompanyName,
+                            QuickBooksInvoiceId = qbCreditMemoId,
+                            InvoiceNumber = memo.RefNumber?.GetValue() ?? "",
+                            CustomerName = memo.CustomerRef?.FullName?.GetValue() ?? "",
+                            CustomerNTN = customerData.NTN,
+                            Amount = Convert.ToDecimal(memo.Subtotal?.GetValue() ?? 0),
+                            Status = uploadRecord?.Status == UploadStatus.Success ? "Uploaded" :
+                                    uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
+                            CreatedDate = memo.TxnDate?.GetValue() ?? DateTime.Now,
+                            InvoiceDate = memo.TxnDate?.GetValue() ?? DateTime.Now,
+                            FBR_IRN = uploadRecord?.IRN,
+                            UploadDate = uploadRecord?.UploadDate,
+                            InvoiceType = "Credit Memo"  // Add this field to distinguish
+                        });
+                    }
+
+                    if (excludeUploaded && skippedCount > 0)
+                    {
+                        LogBoth($"✅ Skipped {skippedCount} already-uploaded credit memos");
+                    }
+
+                    LogBoth($"✅ Fetched {creditMemos.Count} credit memos for date range");
+                }
+            }
+
+            return creditMemos;
+        }
+
+        #endregion
+
+        #region Transaction Details (Invoice & Credit Memo)
+
         public async Task<FBRInvoicePayload> GetInvoiceDetails(string qbInvoiceId, bool checkUploadStatus = true)
         {
             _fbr = new FBRApiService();
@@ -328,20 +501,17 @@ namespace C2B_FBR_Connect.Services
             {
                 if (!_isConnected) Connect();
 
-                // ✅ Initialize tracking service if not already done
                 if (_trackingService == null)
                 {
                     _trackingService = new InvoiceTrackingService(CurrentCompanyName);
                 }
 
-                // ✅ CHECK IF ALREADY UPLOADED
                 if (checkUploadStatus && _trackingService.IsInvoiceUploaded(qbInvoiceId))
                 {
                     LogBoth($"⏭️ Invoice {qbInvoiceId} already uploaded - skipping QB query");
-                    return null; // Or return cached data if needed
+                    return null;
                 }
 
-                // ... rest of existing GetInvoiceDetails code ...
                 var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
                 msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
 
@@ -359,10 +529,9 @@ namespace C2B_FBR_Connect.Services
                 if (invoiceRetList == null || invoiceRetList.Count == 0)
                     return null;
 
-                var inv = invoiceRetList.GetAt(0);
+                PreloadInvoiceData(invoiceRetList);
 
-                // PRE-LOAD ALL DATA IN BATCH
-                PreloadInvoiceData(inv);
+                var inv = invoiceRetList.GetAt(0);
 
                 string customerListID = inv.CustomerRef?.ListID?.GetValue() ?? "";
                 var customerData = FetchCustomerDetails(customerListID);
@@ -390,14 +559,10 @@ namespace C2B_FBR_Connect.Services
 
                 double taxRate = inv.SalesTaxPercentage?.GetValue() ?? 0;
 
-                // Process invoice lines
                 var lineItemsWithContext = ProcessInvoiceLines(inv);
                 ApplyDiscountsContextually(lineItemsWithContext);
 
-                // Build invoice items
                 await BuildInvoiceItems(lineItemsWithContext, payload, taxRate);
-
-                // Enrich with SRO data if available
                 await EnrichWithSroData(payload);
 
                 return payload;
@@ -408,8 +573,98 @@ namespace C2B_FBR_Connect.Services
             }
             finally
             {
-                // Log cache statistics
-                LogBoth(_cache.GetCacheStats());
+                LogBoth(GetSessionStats());
+
+                if (!wasConnected && _isConnected)
+                {
+                    CloseSession();
+                    CloseConnection();
+                }
+            }
+        }
+
+        public async Task<FBRInvoicePayload> GetCreditMemoDetails(string qbCreditMemoId, bool checkUploadStatus = true)
+        {
+            _fbr = new FBRApiService();
+            bool wasConnected = _isConnected;
+
+            try
+            {
+                if (!_isConnected) Connect();
+
+                if (_trackingService == null)
+                {
+                    _trackingService = new InvoiceTrackingService(CurrentCompanyName);
+                }
+
+                if (checkUploadStatus && _trackingService.IsInvoiceUploaded(qbCreditMemoId))
+                {
+                    LogBoth($"⏭️ Credit Memo {qbCreditMemoId} already uploaded - skipping QB query");
+                    return null;
+                }
+
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
+                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
+
+                var creditMemoQuery = msgSetRq.AppendCreditMemoQueryRq();
+                creditMemoQuery.ORTxnQuery.TxnIDList.Add(qbCreditMemoId);
+                creditMemoQuery.IncludeLineItems.SetValue(true);
+
+                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
+                var response = msgSetRs.ResponseList.GetAt(0);
+
+                if (response.StatusCode != 0 || response.Detail == null)
+                    return null;
+
+                var creditMemoRetList = response.Detail as ICreditMemoRetList;
+                if (creditMemoRetList == null || creditMemoRetList.Count == 0)
+                    return null;
+
+                PreloadCreditMemoData(creditMemoRetList);
+
+                var memo = creditMemoRetList.GetAt(0);
+
+                string customerListID = memo.CustomerRef?.ListID?.GetValue() ?? "";
+                var customerData = FetchCustomerDetails(customerListID);
+
+                var payload = new FBRInvoicePayload
+                {
+                    InvoiceType = "Debit Note",
+                    InvoiceNumber = memo.RefNumber?.GetValue() ?? "",
+                    InvoiceDate = memo.TxnDate?.GetValue() ?? DateTime.Now,
+                    SellerNTN = _companySettings?.SellerNTN ?? "",
+                    SellerBusinessName = _companyInfo?.Name ?? CurrentCompanyName,
+                    SellerProvince = _companySettings?.SellerProvince ?? "",
+                    SellerAddress = _companySettings?.SellerAddress ?? _companyInfo?.Address ?? "",
+                    CustomerName = memo.CustomerRef?.FullName?.GetValue() ?? "",
+                    CustomerNTN = customerData.NTN,
+                    BuyerProvince = customerData.State,
+                    BuyerAddress = customerData.Address,
+                    BuyerRegistrationType = customerData.CustomerType,
+                    BuyerPhone = customerData.Phone,
+                    TotalAmount = Convert.ToDecimal((memo.Subtotal?.GetValue() ?? 0) + (memo.SalesTaxTotal?.GetValue() ?? 0)),
+                    Subtotal = Convert.ToDecimal(memo.Subtotal?.GetValue() ?? 0),
+                    TaxAmount = Convert.ToDecimal(memo.SalesTaxTotal?.GetValue() ?? 0),
+                    Items = new List<InvoiceItem>()
+                };
+
+                double taxRate = memo.SalesTaxPercentage?.GetValue() ?? 0;
+
+                var lineItemsWithContext = ProcessCreditMemoLines(memo);
+                ApplyDiscountsContextually(lineItemsWithContext);
+
+                await BuildInvoiceItems(lineItemsWithContext, payload, taxRate);
+                await EnrichWithSroData(payload);
+
+                return payload;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Failed to get credit memo details: {ex.Message}", ex);
+            }
+            finally
+            {
+                LogBoth(GetSessionStats());
 
                 if (!wasConnected && _isConnected)
                 {
@@ -421,7 +676,7 @@ namespace C2B_FBR_Connect.Services
 
         #endregion
 
-        #region Invoice Line Processing
+        #region Line Processing (Invoice & Credit Memo)
 
         private List<LineItemContext> ProcessInvoiceLines(IInvoiceRet inv)
         {
@@ -429,6 +684,9 @@ namespace C2B_FBR_Connect.Services
 
             if (inv.ORInvoiceLineRetList == null)
                 return lineItems;
+
+            LogBoth($"\n🔍 === PROCESSING INVOICE LINES ===");
+            LogBoth($"Total lines in invoice: {inv.ORInvoiceLineRetList.Count}");
 
             for (int i = 0; i < inv.ORInvoiceLineRetList.Count; i++)
             {
@@ -439,10 +697,14 @@ namespace C2B_FBR_Connect.Services
                 string itemListID = line.ItemRef?.ListID?.GetValue() ?? "";
                 double lineAmount = line.Amount?.GetValue() ?? 0;
                 string itemType = line.ItemRef?.FullName?.GetValue() ?? "";
-                string itemName = line.Desc?.GetValue() ?? "";
+                string itemName = line.Desc?.GetValue() ?? itemType;
 
-                bool isSubtotal = IsLikelySubtotal(line, itemListID, itemType, itemName, lineAmount);
                 bool isDiscount = lineAmount < 0 || itemType.Contains("Discount", StringComparison.OrdinalIgnoreCase);
+                bool isSubtotal = IsLikelySubtotal(line, itemListID, itemType, itemName, lineAmount);
+
+                string lineType = isDiscount ? "DISCOUNT" : isSubtotal ? "SUBTOTAL" : "ITEM";
+
+                LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
 
                 lineItems.Add(new LineItemContext
                 {
@@ -457,29 +719,139 @@ namespace C2B_FBR_Connect.Services
                 });
             }
 
+            LogBoth($"=====================================\n");
+
             return lineItems;
         }
 
+        private List<LineItemContext> ProcessCreditMemoLines(ICreditMemoRet memo)
+        {
+            var lineItems = new List<LineItemContext>();
+
+            if (memo.ORCreditMemoLineRetList == null)
+                return lineItems;
+
+            LogBoth($"\n🔍 === PROCESSING CREDIT MEMO LINES ===");
+            LogBoth($"Total lines in credit memo: {memo.ORCreditMemoLineRetList.Count}");
+
+            for (int i = 0; i < memo.ORCreditMemoLineRetList.Count; i++)
+            {
+                var lineRet = memo.ORCreditMemoLineRetList.GetAt(i);
+                if (lineRet.CreditMemoLineRet == null) continue;
+
+                var line = lineRet.CreditMemoLineRet;
+                string itemListID = line.ItemRef?.ListID?.GetValue() ?? "";
+                double lineAmount = line.Amount?.GetValue() ?? 0;
+                string itemType = line.ItemRef?.FullName?.GetValue() ?? "";
+                string itemName = line.Desc?.GetValue() ?? itemType;
+
+                bool isDiscount = lineAmount < 0 || itemType.Contains("Discount", StringComparison.OrdinalIgnoreCase);
+                bool isSubtotal = IsLikelySubtotalCreditMemo(line, itemListID, itemType, itemName, lineAmount);
+
+                string lineType = isDiscount ? "DISCOUNT" : isSubtotal ? "SUBTOTAL" : "ITEM";
+
+                LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
+
+                var invoiceLine = ConvertCreditMemoLineToInvoiceLine(line);
+
+                lineItems.Add(new LineItemContext
+                {
+                    Index = i,
+                    Line = invoiceLine,
+                    ItemListID = itemListID,
+                    Amount = lineAmount,
+                    ItemType = itemType,
+                    ItemName = itemName,
+                    IsDiscount = isDiscount,
+                    IsSubtotal = isSubtotal
+                });
+            }
+
+            LogBoth($"=====================================\n");
+
+            return lineItems;
+        }
+
+        private bool IsLikelySubtotal(IInvoiceLineRet line, string itemListID, string itemType, string itemName, double lineAmount)
+        {
+            string type = itemType?.Trim() ?? "";
+            string name = itemName?.Trim() ?? "";
+
+            if (type.Contains("subtotal", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("subtotal", StringComparison.OrdinalIgnoreCase))
+            {
+                LogBoth($"   ✓ Subtotal detected by name: {name}");
+                return true;
+            }
+
+            bool itemRefEmpty = string.IsNullOrEmpty(itemListID);
+            bool quantityMissing = line.Quantity == null || Math.Abs(line.Quantity.GetValue()) == 0;
+
+            if (itemRefEmpty && quantityMissing && lineAmount > 0)
+            {
+                LogBoth($"   ✓ Subtotal detected by characteristics: No ItemRef + No Quantity + Positive Amount");
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool IsLikelySubtotalCreditMemo(ICreditMemoLineRet line, string itemListID, string itemType, string itemName, double lineAmount)
+        {
+            string type = itemType?.Trim() ?? "";
+            string name = itemName?.Trim() ?? "";
+
+            if (type.Contains("subtotal", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("subtotal", StringComparison.OrdinalIgnoreCase))
+            {
+                LogBoth($"   ✓ Subtotal detected by name: {name}");
+                return true;
+            }
+
+            bool itemRefEmpty = string.IsNullOrEmpty(itemListID);
+            bool quantityMissing = line.Quantity == null || Math.Abs(line.Quantity.GetValue()) == 0;
+
+            if (itemRefEmpty && quantityMissing && lineAmount > 0)
+            {
+                LogBoth($"   ✓ Subtotal detected by characteristics");
+                return true;
+            }
+
+            return false;
+        }
+
+        private IInvoiceLineRet ConvertCreditMemoLineToInvoiceLine(ICreditMemoLineRet creditMemoLine)
+        {
+            return new CreditMemoLineWrapper(creditMemoLine);
+        }
+
+        #endregion
+
+        #region Invoice Item Building
+
         private async Task BuildInvoiceItems(List<LineItemContext> lineItems, FBRInvoicePayload payload, double taxRate)
         {
-            LogBoth($"\n🔨 BuildInvoiceItems: Processing {lineItems.Count} line items");
-            LogBoth($"   Tax Rate: {taxRate}%");
+            LogBoth($"\n🔨 === BUILD INVOICE ITEMS START ===");
+            LogBoth($"Processing {lineItems.Count} line items with tax rate: {taxRate}%");
 
             foreach (var context in lineItems)
             {
                 // Skip non-item lines
                 if (context.IsDiscount || context.IsSubtotal)
+                {
+                    LogBoth($"Skipping line {context.Index}: {(context.IsDiscount ? "Discount" : "Subtotal")}");
                     continue;
+                }
 
                 if (string.IsNullOrEmpty(context.ItemListID) && string.IsNullOrEmpty(context.ItemType))
+                {
+                    LogBoth($"Skipping line {context.Index}: No item reference");
                     continue;
+                }
 
                 var line = context.Line;
-
-                // Fetch item details from QuickBooks (uses cache)
                 var itemData = FetchItemDetails(context.ItemListID);
 
-                // Extract item properties (with line-level overrides)
                 string hsCode = itemData.HSCode;
                 string retailPrice = itemData.RetailPrice;
                 string saleType = itemData.SaleType;
@@ -515,24 +887,30 @@ namespace C2B_FBR_Connect.Services
                 bool isCNGSales = saleType?.Contains("CNG Sales", StringComparison.OrdinalIgnoreCase) == true ||
                                   saleType?.Equals("CNG", StringComparison.OrdinalIgnoreCase) == true;
 
-                // Determine effective tax rate
                 double effectiveTaxRate = taxRate;
                 if (isExempt || isZeroRated)
                 {
                     effectiveTaxRate = 0;
                 }
 
-                // Calculate base amounts
+                // ✅ CALCULATE BASE AMOUNTS WITH PROPER DISCOUNT HANDLING
                 int quantity = Convert.ToInt32(line.Quantity?.GetValue() ?? 1);
                 decimal lineAmount = Convert.ToDecimal(context.Amount);
                 decimal discount = context.ApplicableDiscount;
+
+                // ✅ PRESERVE THIS - Don't let tax methods overwrite it!
                 decimal netAmount = lineAmount - discount;
 
-                // Validate net amount
-                if (netAmount <= 0)
+                if (netAmount < 0)
                 {
-                    netAmount = Math.Abs(lineAmount);
+                    LogBoth($"⚠️ Warning: Net amount for item {context.Index} is negative ({netAmount:C}). Setting to 0.");
+                    netAmount = 0;
                 }
+
+                LogBoth($"\n💵 Item {context.Index}: {line.Desc?.GetValue()}");
+                LogBoth($"   Line Amount: {lineAmount:C}");
+                LogBoth($"   Discount: {discount:C}");
+                LogBoth($"   Net Amount: {netAmount:C}");
 
                 // Parse retail price
                 decimal parsedRetailPrice = 0m;
@@ -543,6 +921,7 @@ namespace C2B_FBR_Connect.Services
                 decimal displayTaxRate, salesTaxAmount, furtherTax, computedTotalValue;
                 string rateString;
 
+                // ✅ KEY FIX: Don't pass netAmount as out parameter to tax methods!
                 if (isExempt)
                 {
                     CalculateExemptTax(netAmount, out displayTaxRate, out salesTaxAmount, out furtherTax, out rateString, out computedTotalValue);
@@ -561,7 +940,15 @@ namespace C2B_FBR_Connect.Services
                 }
                 else if (is3rdSchedule && parsedRetailPrice > 0)
                 {
-                    Calculate3rdScheduleTax(parsedRetailPrice, effectiveTaxRate, out displayTaxRate, out salesTaxAmount, out furtherTax, out rateString, out computedTotalValue, out netAmount);
+                    // ✅ FIX: Use a temporary variable, don't overwrite netAmount!
+                    decimal tempNetAmount;
+                    Calculate3rdScheduleTax(parsedRetailPrice, effectiveTaxRate, out displayTaxRate, out salesTaxAmount, out furtherTax, out rateString, out computedTotalValue, out tempNetAmount);
+
+                    // ✅ For 3rd schedule items, netAmount should be 0 (tax is on retail price)
+                    // But we preserve the discount information in TotalPrice
+                    netAmount = 0m;
+
+                    LogBoth($"   📌 3rd Schedule item: Using retail price {parsedRetailPrice:C} for tax calculation");
                 }
                 else if (isSRO297)
                 {
@@ -580,6 +967,8 @@ namespace C2B_FBR_Connect.Services
                     CalculateStandardTax(netAmount, effectiveTaxRate, out displayTaxRate, out salesTaxAmount, out furtherTax, out rateString, out computedTotalValue);
                 }
 
+                LogBoth($"   Tax Rate: {displayTaxRate}% | Sales Tax: {salesTaxAmount:C} | Total: {computedTotalValue:C}");
+
                 // Create invoice item
                 string itemName = line.Desc?.GetValue() ?? "";
                 decimal unitPrice = quantity > 0 ? lineAmount / quantity : lineAmount;
@@ -592,8 +981,8 @@ namespace C2B_FBR_Connect.Services
                     Quantity = quantity,
                     UnitOfMeasure = await GetUnitOfMeasure(hsCode, line.UnitOfMeasure?.GetValue()),
                     UnitPrice = unitPrice,
-                    TotalPrice = lineAmount,
-                    NetAmount = netAmount,
+                    TotalPrice = lineAmount,          // ✅ Original amount BEFORE discount
+                    NetAmount = netAmount,             // ✅ Amount AFTER discount (will be 0 for 3rd schedule)
                     TaxRate = displayTaxRate,
                     Rate = rateString,
                     SalesTaxAmount = salesTaxAmount,
@@ -603,20 +992,21 @@ namespace C2B_FBR_Connect.Services
                     FurtherTax = furtherTax,
                     FedPayable = 0m,
                     SalesTaxWithheldAtSource = 0m,
-                    Discount = discount,
+                    Discount = discount,               // ✅ Discount amount
                     SaleType = saleType ?? "Goods at standard rate (default)",
                     SroScheduleNo = "",
                     SroItemSerialNo = ""
                 };
 
-                // Set default SRO values
                 SetDefaultSroValues(item);
-
                 payload.Items.Add(item);
             }
 
-            LogBoth($"\n✅ BuildInvoiceItems Complete: Added {payload.Items.Count} items to payload\n");
+            LogBoth($"\n✅ === BUILD INVOICE ITEMS COMPLETE ===");
+            LogBoth($"Added {payload.Items.Count} items to payload\n");
         }
+
+        #endregion
 
         #region Tax Calculation Methods
 
@@ -669,13 +1059,16 @@ namespace C2B_FBR_Connect.Services
         }
 
         private void Calculate3rdScheduleTax(decimal retailPrice, double effectiveTaxRate, out decimal displayTaxRate, out decimal salesTaxAmount,
-            out decimal furtherTax, out string rateString, out decimal computedTotalValue, out decimal netAmount)
+            out decimal furtherTax, out string rateString, out decimal computedTotalValue, out decimal ignoredNetAmount)
         {
             displayTaxRate = Convert.ToDecimal(effectiveTaxRate);
             salesTaxAmount = Convert.ToDecimal((double)retailPrice * (effectiveTaxRate / 100.0));
             furtherTax = 0m;
             rateString = $"{effectiveTaxRate}%";
-            netAmount = 0m;
+
+            // For 3rd schedule items, tax is calculated on retail price, not on sale value
+            ignoredNetAmount = 0m;
+
             computedTotalValue = retailPrice + salesTaxAmount;
         }
 
@@ -732,6 +1125,8 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
+
+        #region Helper Methods for Tax & SRO
 
         private async Task<string> GetUnitOfMeasure(string hsCode, string defaultUom)
         {
@@ -790,17 +1185,32 @@ namespace C2B_FBR_Connect.Services
 
         private void ApplyDiscountsContextually(List<LineItemContext> lineItems)
         {
+            LogBoth($"\n🔍 === DISCOUNT PROCESSING START ===");
+            LogBoth($"Total line items: {lineItems.Count}");
+
+            // Find all subtotal positions
             var subtotalIndices = lineItems
                 .Select((item, index) => new { item, index })
                 .Where(x => x.item.IsSubtotal)
                 .Select(x => x.index)
                 .ToList();
 
-            foreach (var discount in lineItems.Where(x => x.IsDiscount))
+            LogBoth($"Found {subtotalIndices.Count} subtotals at positions: {string.Join(", ", subtotalIndices)}");
+
+            // Process each discount
+            var discounts = lineItems.Where(x => x.IsDiscount).ToList();
+            LogBoth($"Found {discounts.Count} discounts to process");
+
+            foreach (var discount in discounts)
             {
                 decimal discountAmount = Math.Abs(Convert.ToDecimal(discount.Amount));
                 int discountIndex = discount.Index;
 
+                LogBoth($"\n📊 Processing discount at index {discountIndex}:");
+                LogBoth($"   Discount amount: {discountAmount:C}");
+                LogBoth($"   Discount name: {discount.ItemName}");
+
+                // Find the relevant subtotal BEFORE this discount
                 int relevantSubtotalIndex = subtotalIndices
                     .Where(idx => idx < discountIndex)
                     .OrderByDescending(idx => idx)
@@ -808,60 +1218,91 @@ namespace C2B_FBR_Connect.Services
 
                 if (relevantSubtotalIndex >= 0)
                 {
+                    LogBoth($"   Found subtotal at index {relevantSubtotalIndex} before discount");
                     ApplyDiscountToSubtotalRange(lineItems, relevantSubtotalIndex, discountIndex, discountAmount);
                 }
                 else
                 {
+                    LogBoth($"   No subtotal found - applying to previous item only");
                     ApplyDiscountToPreviousItem(lineItems, discountIndex, discountAmount);
                 }
             }
+
+            // Log final discount distribution
+            LogBoth($"\n✅ === DISCOUNT DISTRIBUTION SUMMARY ===");
+            foreach (var item in lineItems.Where(x => !x.IsDiscount && !x.IsSubtotal))
+            {
+                if (item.ApplicableDiscount > 0)
+                {
+                    LogBoth($"   Item {item.Index} ({item.ItemName}): Original={item.Amount:C}, Discount={item.ApplicableDiscount:C}, Net={item.Amount - (double)item.ApplicableDiscount:C}");
+                }
+            }
+            LogBoth($"===========================================\n");
         }
 
         private void ApplyDiscountToSubtotalRange(List<LineItemContext> lineItems, int subtotalIndex, int discountIndex, decimal discountAmount)
         {
-            var itemsToDiscount = lineItems
-                .Skip(subtotalIndex + 1)
-                .Take(discountIndex - subtotalIndex - 1)
-                .Where(x => !x.IsDiscount && !x.IsSubtotal)
-                .ToList();
+            LogBoth($"\n   📍 Applying discount to subtotal range:");
 
-            if (itemsToDiscount.Count == 0)
+            // STEP 1: Find the range start (previous subtotal or beginning)
+            int rangeStart = 0;
+            for (int j = subtotalIndex - 1; j >= 0; j--)
             {
-                int rangeStart = 0;
-                for (int j = subtotalIndex - 1; j >= 0; j--)
+                if (lineItems[j].IsSubtotal)
                 {
-                    if (lineItems[j].IsSubtotal)
-                    {
-                        rangeStart = j + 1;
-                        break;
-                    }
+                    rangeStart = j + 1;
+                    break;
                 }
-
-                itemsToDiscount = lineItems
-                    .Skip(rangeStart)
-                    .Take(subtotalIndex - rangeStart)
-                    .Where(x => !x.IsDiscount && !x.IsSubtotal)
-                    .ToList();
             }
 
-            DistributeDiscountToItems(itemsToDiscount, discountAmount);
+            LogBoth($"   Range: {rangeStart} to {subtotalIndex - 1}");
+
+            // STEP 2: Collect all items in the subtotal range (before the subtotal)
+            var itemsInRange = lineItems
+                .Skip(rangeStart)
+                .Take(subtotalIndex - rangeStart)
+                .Where(x => !x.IsDiscount && !x.IsSubtotal && x.Amount > 0)
+                .ToList();
+
+            if (itemsInRange.Count == 0)
+            {
+                LogBoth($"   ⚠️ No valid items found in subtotal range");
+                return;
+            }
+
+            LogBoth($"   Found {itemsInRange.Count} items in range to apply discount:");
+            foreach (var item in itemsInRange)
+            {
+                LogBoth($"      - Item {item.Index}: {item.ItemName} = {item.Amount:C}");
+            }
+
+            // STEP 3: Distribute discount proportionally
+            DistributeDiscountToItems(itemsInRange, discountAmount);
         }
 
         private void ApplyDiscountToPreviousItem(List<LineItemContext> lineItems, int discountIndex, decimal discountAmount)
         {
+            LogBoth($"\n   📍 Applying discount to previous item only:");
+
+            // Find the last actual item before this discount
             var previousItem = lineItems
                 .Take(discountIndex)
-                .Where(x => !x.IsDiscount && !x.IsSubtotal)
+                .Where(x => !x.IsDiscount && !x.IsSubtotal && x.Amount > 0)
                 .LastOrDefault();
 
-            if (previousItem != null)
+            if (previousItem == null)
             {
-                decimal itemAmount = Math.Abs(Convert.ToDecimal(previousItem.Amount));
-                previousItem.ApplicableDiscount = Math.Min(
-                    previousItem.ApplicableDiscount + discountAmount,
-                    itemAmount
-                );
+                LogBoth($"   ⚠️ No previous item found to apply discount");
+                return;
             }
+
+            decimal itemAmount = Math.Abs(Convert.ToDecimal(previousItem.Amount));
+            decimal applicableDiscount = Math.Min(discountAmount, itemAmount);
+
+            previousItem.ApplicableDiscount += applicableDiscount;
+
+            LogBoth($"   Applied {applicableDiscount:C} discount to item {previousItem.Index} ({previousItem.ItemName})");
+            LogBoth($"   Item amount: {itemAmount:C} -> Net: {itemAmount - applicableDiscount:C}");
         }
 
         private void DistributeDiscountToItems(List<LineItemContext> items, decimal totalDiscount)
@@ -869,12 +1310,25 @@ namespace C2B_FBR_Connect.Services
             if (items == null || items.Count == 0 || totalDiscount <= 0)
                 return;
 
-            decimal totalAmount = items.Sum(x => Math.Abs(Convert.ToDecimal(x.Amount)));
-            if (totalAmount <= 0) return;
+            LogBoth($"\n   💰 Distributing {totalDiscount:C} across {items.Count} items:");
 
+            // Calculate total amount of all items
+            decimal totalAmount = items.Sum(x => Math.Abs(Convert.ToDecimal(x.Amount)));
+
+            if (totalAmount <= 0)
+            {
+                LogBoth($"   ⚠️ Total amount is zero - cannot distribute discount");
+                return;
+            }
+
+            LogBoth($"   Total amount: {totalAmount:C}");
+
+            // Cap discount at total amount
             totalDiscount = Math.Min(totalDiscount, totalAmount);
 
+            // Distribute proportionally with rounding
             decimal allocated = 0m;
+
             for (int i = 0; i < items.Count; i++)
             {
                 decimal itemAmount = Math.Abs(Convert.ToDecimal(items[i].Amount));
@@ -883,38 +1337,27 @@ namespace C2B_FBR_Connect.Services
 
                 items[i].ApplicableDiscount += itemDiscount;
                 allocated += itemDiscount;
+
+                LogBoth($"      Item {items[i].Index}: {itemAmount:C} ({proportion:P2}) -> Discount: {itemDiscount:C}");
             }
 
+            // Handle rounding remainder - add to largest item
             decimal remainder = totalDiscount - allocated;
             if (remainder != 0m && items.Count > 0)
             {
                 var largestItem = items.OrderByDescending(x => Math.Abs(Convert.ToDecimal(x.Amount))).First();
                 largestItem.ApplicableDiscount += remainder;
+
+                LogBoth($"   🔧 Rounding adjustment: {remainder:C} added to largest item (Index {largestItem.Index})");
             }
-        }
 
-        private bool IsLikelySubtotal(IInvoiceLineRet line, string itemListID, string itemType, string itemName, double lineAmount)
-        {
-            string type = itemType?.Trim() ?? "";
-            string name = itemName?.Trim() ?? "";
-
-            if (type.Contains("subtotal", StringComparison.OrdinalIgnoreCase) ||
-                name.Contains("subtotal", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            bool itemRefEmpty = string.IsNullOrEmpty(itemListID);
-            bool quantityMissing = line.Quantity == null || Math.Abs(line.Quantity.GetValue()) == 0;
-
-            return itemRefEmpty && quantityMissing && lineAmount > 0;
+            LogBoth($"   ✅ Total allocated: {items.Sum(x => x.ApplicableDiscount):C}");
         }
 
         #endregion
 
         #region Tracking Management
 
-        /// <summary>
-        /// Mark invoice as successfully uploaded
-        /// </summary>
         public void MarkInvoiceAsUploaded(string qbInvoiceId, string invoiceNumber, string irn)
         {
             if (_trackingService == null)
@@ -926,9 +1369,6 @@ namespace C2B_FBR_Connect.Services
             LogBoth($"✅ Marked invoice {invoiceNumber} as uploaded (IRN: {irn})");
         }
 
-        /// <summary>
-        /// Mark invoice as failed
-        /// </summary>
         public void MarkInvoiceAsFailed(string qbInvoiceId, string invoiceNumber, string errorMessage)
         {
             if (_trackingService == null)
@@ -940,9 +1380,6 @@ namespace C2B_FBR_Connect.Services
             LogBoth($"❌ Marked invoice {invoiceNumber} as failed: {errorMessage}");
         }
 
-        /// <summary>
-        /// Get tracking statistics
-        /// </summary>
         public string GetTrackingStatistics()
         {
             if (_trackingService == null)
@@ -953,9 +1390,6 @@ namespace C2B_FBR_Connect.Services
             return _trackingService.GetStatistics().ToString();
         }
 
-        /// <summary>
-        /// Clear invoice tracking (use with caution!)
-        /// </summary>
         public void ClearInvoiceTracking()
         {
             if (_trackingService == null)
@@ -967,9 +1401,6 @@ namespace C2B_FBR_Connect.Services
             LogBoth("🔄 Cleared all invoice tracking data");
         }
 
-        /// <summary>
-        /// Get tracking service for advanced operations
-        /// </summary>
         public InvoiceTrackingService GetTrackingService()
         {
             if (_trackingService == null)
@@ -982,22 +1413,211 @@ namespace C2B_FBR_Connect.Services
 
         #endregion
 
-        #region Data Fetching with Cache
+        #region Optimized Batch Fetching Methods
 
-        private CustomerData FetchCustomerDetails(string customerListID)
+        private void BatchFetchAllData(List<string> customerIds, List<string> itemIds)
+        {
+            if ((customerIds == null || customerIds.Count == 0) && (itemIds == null || itemIds.Count == 0))
+                return;
+
+            try
+            {
+                LogBoth($"🚀 Starting optimized batch fetch: {customerIds.Count} customers, {itemIds.Count} items");
+                var startTime = DateTime.Now;
+
+                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
+                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
+
+                if (customerIds.Count > 0)
+                {
+                    var customerQuery = msgSetRq.AppendCustomerQueryRq();
+
+                    if (customerIds.Count > 20)
+                    {
+                        customerQuery.OwnerIDList.Add("0");
+                        customerQuery.ORCustomerListQuery.CustomerListFilter.ActiveStatus.SetValue(ENActiveStatus.asActiveOnly);
+                        LogBoth($"   📋 Fetching ALL customers (count > 20)");
+                    }
+                    else
+                    {
+                        foreach (var id in customerIds)
+                            customerQuery.ORCustomerListQuery.ListIDList.Add(id);
+                        customerQuery.OwnerIDList.Add("0");
+                        LogBoth($"   📋 Fetching {customerIds.Count} specific customers");
+                    }
+                }
+
+                if (itemIds.Count > 0)
+                {
+                    var itemQuery = msgSetRq.AppendItemQueryRq();
+
+                    if (itemIds.Count > 20)
+                    {
+                        itemQuery.OwnerIDList.Add("0");
+                        LogBoth($"   📦 Fetching ALL items (count > 20)");
+                    }
+                    else
+                    {
+                        for (int i = 0; i < itemIds.Count; i++)
+                            itemQuery.ORListQuery.ListIDList.Add(itemIds[i]);
+                        itemQuery.OwnerIDList.Add("0");
+                        LogBoth($"   📦 Fetching {itemIds.Count} specific items");
+                    }
+                }
+
+                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
+
+                for (int i = 0; i < msgSetRs.ResponseList.Count; i++)
+                {
+                    var response = msgSetRs.ResponseList.GetAt(i);
+                    if (response.StatusCode == 0)
+                    {
+                        if (response.Detail is ICustomerRetList customerList)
+                        {
+                            ProcessCustomerResults(customerList, customerIds);
+                        }
+                        else if (response.Detail is IORItemRetList itemList)
+                        {
+                            ProcessItemResults(itemList, itemIds);
+                        }
+                    }
+                }
+
+                var elapsed = DateTime.Now - startTime;
+                LogBoth($"✅ Batch fetch completed in {elapsed.TotalMilliseconds}ms");
+            }
+            catch (Exception ex)
+            {
+                LogBoth($"❌ Error in optimized batch fetch: {ex.Message}");
+                LogBoth($"   🔄 Falling back to individual fetches");
+                if (customerIds.Count > 0) BatchFetchCustomersLegacy(customerIds);
+                if (itemIds.Count > 0) BatchFetchItemsLegacy(itemIds);
+            }
+        }
+
+        private void ProcessCustomerResults(ICustomerRetList customerList, List<string> requestedIds)
+        {
+            if (customerList == null) return;
+
+            var neededIDs = new HashSet<string>(requestedIds);
+            int cached = 0;
+
+            for (int i = 0; i < customerList.Count; i++)
+            {
+                var customer = customerList.GetAt(i);
+                string listID = customer.ListID?.GetValue();
+
+                if (string.IsNullOrEmpty(listID))
+                    continue;
+
+                if (requestedIds.Count > 20 || neededIDs.Contains(listID))
+                {
+                    var customerData = ExtractCustomerData(customer);
+                    _sessionCustomers[listID] = new CachedData<CustomerData>
+                    {
+                        Data = customerData,
+                        CachedAt = DateTime.Now,
+                        ExpiresAfter = TimeSpan.FromHours(1)
+                    };
+                    cached++;
+                }
+            }
+
+            LogBoth($"   ✅ Cached {cached} customers");
+        }
+
+        private void ProcessItemResults(IORItemRetList itemList, List<string> requestedIds)
+        {
+            if (itemList == null) return;
+
+            var neededIDs = new HashSet<string>(requestedIds);
+            int cached = 0;
+
+            for (int i = 0; i < itemList.Count; i++)
+            {
+                var itemRet = itemList.GetAt(i);
+                string listID = GetItemListID(itemRet);
+
+                if (string.IsNullOrEmpty(listID))
+                    continue;
+
+                if (requestedIds.Count > 20 || neededIDs.Contains(listID))
+                {
+                    var itemData = ExtractItemData(itemRet, listID);
+                    _sessionItems[listID] = new CachedData<ItemData>
+                    {
+                        Data = itemData,
+                        CachedAt = DateTime.Now,
+                        ExpiresAfter = TimeSpan.FromHours(1)
+                    };
+                    cached++;
+                }
+            }
+
+            LogBoth($"   ✅ Cached {cached} items");
+        }
+
+        private void BatchFetchCustomersLegacy(List<string> customerListIDs)
+        {
+            foreach (var id in customerListIDs)
+            {
+                try
+                {
+                    var data = FetchCustomerDetails(id);
+                    _sessionCustomers[id] = new CachedData<CustomerData>
+                    {
+                        Data = data,
+                        CachedAt = DateTime.Now,
+                        ExpiresAfter = TimeSpan.FromHours(1)
+                    };
+                }
+                catch (Exception ex)
+                {
+                    LogBoth($"   ❌ Error fetching customer {id} in legacy fallback: {ex.Message}");
+                }
+            }
+        }
+
+        private void BatchFetchItemsLegacy(List<string> itemListIDs)
+        {
+            foreach (var id in itemListIDs)
+            {
+                try
+                {
+                    var data = FetchItemDetails(id);
+                    _sessionItems[id] = new CachedData<ItemData>
+                    {
+                        Data = data,
+                        CachedAt = DateTime.Now,
+                        ExpiresAfter = TimeSpan.FromHours(1)
+                    };
+                }
+                catch (Exception ex)
+                {
+                    LogBoth($"   ❌ Error fetching item {id} in legacy fallback: {ex.Message}");
+                }
+            }
+        }
+
+        #endregion
+
+        #region Data Fetching with Smart Cache
+
+        private CustomerData FetchCustomerDetails(string customerListID, bool forceRefresh = false)
         {
             if (string.IsNullOrEmpty(customerListID))
             {
                 return new CustomerData { CustomerType = "Unregistered" };
             }
 
-            // ✅ CHECK CACHE FIRST
-            if (_cache.TryGetCustomer(customerListID, out var cachedCustomer))
+            if (!forceRefresh && _sessionCustomers.TryGetValue(customerListID, out var cached))
             {
-                return cachedCustomer;
+                if (!cached.IsExpired)
+                    return cached.Data;
+                else
+                    _sessionCustomers.Remove(customerListID);
             }
 
-            // ✅ CACHE MISS - Fetch from QuickBooks
             LogBoth($"🔍 Fetching customer from QuickBooks (ListID: {customerListID})...");
 
             var customerData = new CustomerData();
@@ -1022,8 +1642,12 @@ namespace C2B_FBR_Connect.Services
                         var customer = customerList.GetAt(0);
                         customerData = ExtractCustomerData(customer);
 
-                        // ✅ ADD TO CACHE
-                        _cache.AddCustomer(customerListID, customerData);
+                        _sessionCustomers[customerListID] = new CachedData<CustomerData>
+                        {
+                            Data = customerData,
+                            CachedAt = DateTime.Now,
+                            ExpiresAfter = TimeSpan.FromHours(1)
+                        };
                     }
                 }
             }
@@ -1035,18 +1659,19 @@ namespace C2B_FBR_Connect.Services
             return customerData;
         }
 
-        private ItemData FetchItemDetails(string itemListID)
+        private ItemData FetchItemDetails(string itemListID, bool forceRefresh = false)
         {
             if (string.IsNullOrEmpty(itemListID))
                 return new ItemData { SaleType = "Goods at standard rate (default)" };
 
-            // ✅ CHECK CACHE FIRST
-            if (_cache.TryGetItem(itemListID, out var cachedItem))
+            if (!forceRefresh && _sessionItems.TryGetValue(itemListID, out var cached))
             {
-                return cachedItem;
+                if (!cached.IsExpired)
+                    return cached.Data;
+                else
+                    _sessionItems.Remove(itemListID);
             }
 
-            // ✅ CACHE MISS - Fetch from QuickBooks
             LogBoth($"🔍 Fetching item from QuickBooks (ListID: {itemListID})...");
 
             var itemData = new ItemData { SaleType = "Goods at standard rate (default)" };
@@ -1071,8 +1696,12 @@ namespace C2B_FBR_Connect.Services
                         var itemRet = itemList.GetAt(0);
                         itemData = ExtractItemData(itemRet, itemListID);
 
-                        // ✅ ADD TO CACHE
-                        _cache.AddItem(itemListID, itemData);
+                        _sessionItems[itemListID] = new CachedData<ItemData>
+                        {
+                            Data = itemData,
+                            CachedAt = DateTime.Now,
+                            ExpiresAfter = TimeSpan.FromHours(1)
+                        };
                     }
                 }
             }
@@ -1082,104 +1711,6 @@ namespace C2B_FBR_Connect.Services
             }
 
             return itemData;
-        }
-
-        #endregion
-
-        #region Batch Fetching Methods
-
-        private void BatchFetchCustomers(List<string> customerListIDs)
-        {
-            if (customerListIDs == null || customerListIDs.Count == 0)
-                return;
-
-            try
-            {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
-                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
-
-                var customerQuery = msgSetRq.AppendCustomerQueryRq();
-                foreach (var listID in customerListIDs)
-                {
-                    customerQuery.ORCustomerListQuery.ListIDList.Add(listID);
-                }
-                customerQuery.OwnerIDList.Add("0");
-
-                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
-                var response = msgSetRs.ResponseList.GetAt(0);
-
-                if (response.StatusCode == 0)
-                {
-                    var customerList = response.Detail as ICustomerRetList;
-                    if (customerList != null)
-                    {
-                        for (int i = 0; i < customerList.Count; i++)
-                        {
-                            var customer = customerList.GetAt(i);
-                            string listID = customer.ListID?.GetValue();
-
-                            if (string.IsNullOrEmpty(listID))
-                                continue;
-
-                            var customerData = ExtractCustomerData(customer);
-                            _cache.AddCustomer(listID, customerData);
-                        }
-
-                        LogBoth($"✅ Batch loaded {customerList.Count} customers");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogBoth($"❌ Error batch fetching customers: {ex.Message}");
-            }
-        }
-
-        private void BatchFetchItems(List<string> itemListIDs)
-        {
-            if (itemListIDs == null || itemListIDs.Count == 0)
-                return;
-
-            try
-            {
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
-                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
-
-                var itemQuery = msgSetRq.AppendItemQueryRq();
-                foreach (var listID in itemListIDs)
-                {
-                    itemQuery.ORListQuery.ListIDList.Add(listID);
-                }
-                itemQuery.OwnerIDList.Add("0");
-
-                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
-                var response = msgSetRs.ResponseList.GetAt(0);
-
-                if (response.StatusCode == 0)
-                {
-                    var itemList = response.Detail as IORItemRetList;
-                    if (itemList != null)
-                    {
-                        for (int i = 0; i < itemList.Count; i++)
-                        {
-                            var itemRet = itemList.GetAt(i);
-                            string listID = GetItemListID(itemRet);
-
-                            if (string.IsNullOrEmpty(listID))
-                                continue;
-
-                            var itemData = ExtractItemData(itemRet, listID);
-                            _cache.AddItem(listID, itemData);
-                        }
-
-                        LogBoth($"✅ Batch loaded {itemList.Count} items");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                LogBoth($"❌ Error batch fetching items: {ex.Message}");
-            }
         }
 
         #endregion
@@ -1339,12 +1870,7 @@ namespace C2B_FBR_Connect.Services
         {
             try
             {
-                // Check cache first
-                if (!_cache.TryGetPriceLevels(out var priceLevels))
-                {
-                    priceLevels = FetchPriceLevels();
-                    _cache.SetPriceLevels(priceLevels);
-                }
+                var priceLevels = FetchPriceLevels();
 
                 var retailPriceLevel = priceLevels.FirstOrDefault(p =>
                     p.Name?.Equals("Retail Price", StringComparison.OrdinalIgnoreCase) == true);
@@ -1569,6 +2095,7 @@ namespace C2B_FBR_Connect.Services
         {
             try
             {
+                ClearSessionData();
                 CloseSession();
                 CloseConnection();
             }
@@ -1596,6 +2123,16 @@ namespace C2B_FBR_Connect.Services
 
     #region Helper Classes
 
+    public class CachedData<T>
+    {
+        public T Data { get; set; }
+        public DateTime CachedAt { get; set; }
+        public TimeSpan ExpiresAfter { get; set; }
+
+        public bool IsExpired => DateTime.Now - CachedAt > ExpiresAfter;
+    }
+
+    // [KEEP ALL OTHER HELPER CLASSES FROM YOUR ORIGINAL CODE]
     public class CompanyInfo
     {
         public string Name { get; set; }
@@ -1654,6 +2191,38 @@ namespace C2B_FBR_Connect.Services
         public bool IsDiscount { get; set; }
         public bool IsSubtotal { get; set; }
         public decimal ApplicableDiscount { get; set; } = 0;
+    }
+
+    public class CreditMemoLineWrapper : IInvoiceLineRet
+    {
+        private readonly ICreditMemoLineRet _creditMemoLine;
+
+        public CreditMemoLineWrapper(ICreditMemoLineRet creditMemoLine)
+        {
+            _creditMemoLine = creditMemoLine;
+        }
+
+        public IObjectType Type => null;
+        public IQBIDType TxnLineID => _creditMemoLine.TxnLineID;
+        public IQBBaseRef ItemRef => _creditMemoLine.ItemRef;
+        public IQBStringType Desc => _creditMemoLine.Desc;
+        public IQBQuanType Quantity => _creditMemoLine.Quantity;
+        public IQBStringType UnitOfMeasure => _creditMemoLine.UnitOfMeasure;
+        public IQBAmountType Amount => _creditMemoLine.Amount;
+        public IDataExtRetList DataExtRetList => _creditMemoLine.DataExtRetList;
+        public IQBBaseRef OverrideUOMSetRef => null;
+        public IORRate ORRate => null;
+        public IQBBaseRef ClassRef => null;
+        public IQBAmountType TaxAmount => null;
+        public IQBBaseRef InventorySiteRef => null;
+        public IQBBaseRef InventorySiteLocationRef => null;
+        public IORSerialLotNumber ORSerialLotNumber => null;
+        public IQBStringType ExpirationDateForSerialLotNumber => null;
+        public IQBDateType ServiceDate => null;
+        public IQBBaseRef SalesTaxCodeRef => null;
+        public IQBBoolType IsTaxable => null;
+        public IQBStringType Other1 => null;
+        public IQBStringType Other2 => null;
     }
 
     #endregion

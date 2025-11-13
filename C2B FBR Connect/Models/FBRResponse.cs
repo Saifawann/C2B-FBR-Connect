@@ -49,7 +49,7 @@ namespace C2B_FBR_Connect.Models
         public FBRInvoicePayload()
         {
             InvoiceDate = DateTime.Now;
-            InvoiceType = "Sale Invoice";
+            //InvoiceType = "Sale Invoice";
             Items = new List<InvoiceItem>();
         }
     }

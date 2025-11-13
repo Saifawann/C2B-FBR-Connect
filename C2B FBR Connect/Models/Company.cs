@@ -19,6 +19,8 @@ namespace C2B_FBR_Connect.Models
         public string SellerPhone { get; set; }
         public string SellerEmail { get; set; }
 
+        public byte[] LogoImage { get; set; }
+
         public DateTime CreatedDate { get; set; }
         public DateTime? ModifiedDate { get; set; }
     }

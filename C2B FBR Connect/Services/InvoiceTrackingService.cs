@@ -21,7 +21,7 @@ namespace C2B_FBR_Connect.Services
             // Store tracking file in app data directory
             string appDataPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "C2B_FBR_Connect",
+                "C2b Smart App",
                 "InvoiceTracking"
             );
 

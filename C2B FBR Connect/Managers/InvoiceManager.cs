@@ -16,6 +16,9 @@ namespace C2B_FBR_Connect.Managers
         private readonly PDFService _pdf;
         private Company _currentCompany;
 
+        // Cache for FBR payloads (used during upload)
+        private readonly Dictionary<string, FBRInvoicePayload> _payloadCache = new();
+
         public InvoiceManager(DatabaseService db, QuickBooksService qb,
             FBRApiService fbr, PDFService pdf)
         {
@@ -30,172 +33,102 @@ namespace C2B_FBR_Connect.Managers
             _currentCompany = company;
         }
 
-        public async Task<List<Invoice>> FetchFromQuickBooks()
+        public void ClearCache()
+        {
+            _payloadCache.Clear();
+            Console.WriteLine("🗑️ Payload cache cleared");
+        }
+
+        /// <summary>
+        /// OPTIMIZED: Fetch only basic invoice list - NO detailed processing
+        /// Full processing happens only during Upload or View Details
+        /// </summary>
+        public async Task<List<Invoice>> FetchFromQuickBooks(DateTime? dateFrom = null, DateTime? dateTo = null,
+            bool includeInvoices = true, bool includeCreditMemos = false)
         {
             try
             {
                 if (!_qb.Connect(_currentCompany))
                     throw new Exception("Failed to connect to QuickBooks");
 
-                // ✅ CLEAR CACHE TO FORCE FRESH DATA
-                Console.WriteLine("🔄 Starting invoice fetch from QuickBooks...");
-                Console.WriteLine("🗑️ Clearing QuickBooks cache to fetch fresh data...");
+                _payloadCache.Clear();
 
-                // Fetch basic invoice list from QuickBooks
-                var qbInvoices = _qb.FetchInvoices();
-                Console.WriteLine($"📥 Found {qbInvoices.Count} invoices in QuickBooks\n");
+                Console.WriteLine("🔄 Starting FAST transaction fetch from QuickBooks...");
+
+                string dateRangeInfo = "";
+                if (dateFrom.HasValue && dateTo.HasValue)
+                    dateRangeInfo = $" from {dateFrom.Value:dd-MMM-yyyy} to {dateTo.Value:dd-MMM-yyyy}";
+                else if (dateFrom.HasValue)
+                    dateRangeInfo = $" from {dateFrom.Value:dd-MMM-yyyy}";
+                else if (dateTo.HasValue)
+                    dateRangeInfo = $" up to {dateTo.Value:dd-MMM-yyyy}";
+
+                Console.WriteLine($"📅 Date range{dateRangeInfo}");
+
+                // ✅ This already fetches basic invoice data efficiently
+                var qbTransactions = _qb.FetchTransactions(dateFrom, dateTo, true, includeInvoices, includeCreditMemos);
+                Console.WriteLine($"📥 Found {qbTransactions.Count} transactions in QuickBooks\n");
+
+                if (qbTransactions.Count == 0)
+                {
+                    Console.WriteLine("No transactions found in QuickBooks for this date range");
+                    return new List<Invoice>();
+                }
+
+                // Load existing invoices for status preservation
+                Console.WriteLine($"📊 Loading existing invoices from database...");
+                var existingInvoices = _db.GetInvoicesWithDetails(_qb.CurrentCompanyName)
+                    .ToDictionary(i => i.QuickBooksInvoiceId, i => i);
+                Console.WriteLine($"✅ Loaded {existingInvoices.Count} existing invoices\n");
 
                 int updatedCount = 0;
                 int newCount = 0;
                 int preservedCount = 0;
 
-                // For each invoice, fetch complete details including line items
-                foreach (var inv in qbInvoices)
+                // ✅ FAST PROCESSING - No GetInvoiceDetails calls!
+                foreach (var transaction in qbTransactions)
                 {
-                    try
+                    existingInvoices.TryGetValue(transaction.QuickBooksInvoiceId, out var existingInvoice);
+
+                    if (existingInvoice != null && existingInvoice.Status == "Uploaded")
                     {
-                        Console.WriteLine($"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-                        Console.WriteLine($"🔹 Processing invoice: {inv.InvoiceNumber}");
-
-                        // ✅ STEP 1: Check if invoice exists in database FIRST
-                        var existingInvoice = _db.GetInvoiceWithDetails(
-                            inv.QuickBooksInvoiceId,
-                            _qb.CurrentCompanyName
-                        );
-
-                        // ✅ STEP 2: Get fresh detailed invoice data from QuickBooks (includes items with Sale Type)
-                        Console.WriteLine($"   🔍 Fetching detailed invoice data from QuickBooks...");
-                        var details = await _qb.GetInvoiceDetails(inv.QuickBooksInvoiceId);
-
-                        if (details == null)
-                        {
-                            Console.WriteLine($"   ⚠️ Could not fetch details for {inv.InvoiceNumber}");
-                            continue;
-                        }
-
-                        Console.WriteLine($"   ✅ Fetched {details.Items?.Count ?? 0} items from QuickBooks");
-
-                        // ✅ STEP 3: Map invoice header data
-                        inv.TotalAmount = details.TotalAmount;
-                        inv.TaxAmount = details.TaxAmount;
-                        inv.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
-                        inv.InvoiceDate = details.InvoiceDate;
-                        inv.CustomerAddress = details.BuyerAddress;
-                        inv.CustomerPhone = details.BuyerPhone;
-                        inv.CustomerNTN = details.CustomerNTN;
-                        inv.CustomerType = details.BuyerRegistrationType;
-                        inv.CustomerEmail = details.BuyerEmail ?? "";
-                        inv.PaymentMode = "Cash";
-
-                        // ✅ STEP 4: Map invoice items FROM THE DETAILED PAYLOAD (which has Sale Type!)
-                        inv.Items = new List<InvoiceItem>();
-
-                        if (details.Items != null && details.Items.Count > 0)
-                        {
-                            Console.WriteLine($"   📦 Mapping {details.Items.Count} items:");
-
-                            foreach (var fbrItem in details.Items)
-                            {
-                                Console.WriteLine($"      - {fbrItem.ItemName}");
-                                Console.WriteLine($"        Sale Type: '{fbrItem.SaleType}'");
-                                Console.WriteLine($"        HS Code: '{fbrItem.HSCode}'");
-                                Console.WriteLine($"        Quantity: {fbrItem.Quantity}");
-
-                                var invoiceItem = new InvoiceItem
-                                {
-                                    ItemName = fbrItem.ItemName ?? "",
-                                    ItemDescription = fbrItem.ItemName ?? "", // ✅ Use ItemName as description
-                                    Quantity = fbrItem.Quantity,
-                                    UnitPrice = fbrItem.UnitPrice,
-                                    TotalPrice = fbrItem.TotalPrice,
-                                    NetAmount = fbrItem.NetAmount,
-                                    TaxRate = fbrItem.TaxRate,
-                                    SalesTaxAmount = fbrItem.SalesTaxAmount,
-                                    TotalValue = fbrItem.TotalValue,
-                                    HSCode = fbrItem.HSCode ?? "",
-                                    UnitOfMeasure = fbrItem.UnitOfMeasure ?? "",
-                                    RetailPrice = fbrItem.RetailPrice,
-                                    ExtraTax = fbrItem.ExtraTax,
-                                    FurtherTax = fbrItem.FurtherTax,
-                                    FedPayable = fbrItem.FedPayable,
-                                    SalesTaxWithheldAtSource = fbrItem.SalesTaxWithheldAtSource,
-                                    Discount = fbrItem.Discount,
-                                    SaleType = fbrItem.SaleType ?? "Goods at standard rate (default)", // ✅ This comes from QB
-                                    SroScheduleNo = fbrItem.SroScheduleNo ?? "",
-                                    SroItemSerialNo = fbrItem.SroItemSerialNo ?? ""
-                                };
-
-                                inv.Items.Add(invoiceItem);
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine($"   ⚠️ No items found for this invoice");
-                        }
-
-                        // ✅ STEP 5: Preserve FBR upload status if invoice was already uploaded
-                        if (existingInvoice != null && existingInvoice.Status == "Uploaded")
-                        {
-                            Console.WriteLine($"   📌 Preserving upload status for {inv.InvoiceNumber}");
-
-                            inv.Status = "Uploaded";
-                            inv.FBR_IRN = existingInvoice.FBR_IRN;
-                            inv.FBR_QRCode = existingInvoice.FBR_QRCode;
-                            inv.UploadDate = existingInvoice.UploadDate;
-                            inv.ErrorMessage = existingInvoice.ErrorMessage;
-
-                            preservedCount++;
-                        }
-                        else if (existingInvoice != null)
-                        {
-                            Console.WriteLine($"   🔄 Updating existing invoice {inv.InvoiceNumber}");
-
-                            // Keep the existing status if not uploaded
-                            inv.Status = existingInvoice.Status;
-                            inv.ErrorMessage = existingInvoice.ErrorMessage;
-
-                            updatedCount++;
-                        }
-                        else
-                        {
-                            Console.WriteLine($"   ✨ New invoice detected: {inv.InvoiceNumber}");
-
-                            inv.Status = "Pending";
-                            newCount++;
-                        }
-
-                        // ✅ STEP 6: Save invoice with ALL details to database
-                        Console.WriteLine($"   💾 Saving to database...");
-                        _db.SaveInvoiceWithDetails(inv);
-
-                        Console.WriteLine($"   ✅ Saved {inv.InvoiceNumber} with {inv.Items?.Count ?? 0} items");
+                        // Already uploaded - preserve everything, no changes needed
+                        Console.WriteLine($"   ⏭️ {transaction.InvoiceNumber} - Already uploaded, skipping");
+                        preservedCount++;
+                        continue; // Don't even save - nothing changed
                     }
-                    catch (Exception ex)
+                    else if (existingInvoice != null)
                     {
-                        Console.WriteLine($"   ❌ Error processing invoice {inv.InvoiceNumber}: {ex.Message}");
-                        Console.WriteLine($"   Stack: {ex.StackTrace}");
+                        // Exists but not uploaded - update basic info, preserve status
+                        transaction.Status = existingInvoice.Status;
+                        transaction.ErrorMessage = existingInvoice.ErrorMessage;
+                        transaction.Items = existingInvoice.Items; // Keep existing items
 
-                        // Still try to save basic invoice data
-                        try
-                        {
-                            inv.Status = "Error";
-                            inv.ErrorMessage = ex.Message;
-                            _db.SaveInvoice(inv);
-                        }
-                        catch (Exception saveEx)
-                        {
-                            Console.WriteLine($"   ❌ Could not save error state: {saveEx.Message}");
-                        }
+                        // Update header fields from QB (in case they changed)
+                        // But don't do expensive detail fetch
+                        Console.WriteLine($"   🔄 {transaction.InvoiceNumber} - Updating");
+                        updatedCount++;
                     }
+                    else
+                    {
+                        // New invoice - save basic info
+                        transaction.Status = "Pending";
+                        Console.WriteLine($"   ✨ {transaction.InvoiceNumber} - New");
+                        newCount++;
+                    }
+
+                    // Save basic invoice (without full item details)
+                    _db.SaveInvoice(transaction);
                 }
 
                 Console.WriteLine($"\n╔════════════════════════════════════════╗");
-                Console.WriteLine($"║         FETCH SUMMARY                  ║");
+                Console.WriteLine($"║       FAST FETCH SUMMARY               ║");
                 Console.WriteLine($"╚════════════════════════════════════════╝");
-                Console.WriteLine($"✨ New invoices: {newCount}");
-                Console.WriteLine($"🔄 Updated invoices: {updatedCount}");
-                Console.WriteLine($"📌 Preserved uploaded: {preservedCount}");
-                Console.WriteLine($"📝 Total processed: {qbInvoices.Count}");
+                Console.WriteLine($"✨ New: {newCount}");
+                Console.WriteLine($"🔄 Updated: {updatedCount}");
+                Console.WriteLine($"📌 Preserved (uploaded): {preservedCount}");
+                Console.WriteLine($"📝 Total: {qbTransactions.Count}");
+                Console.WriteLine($"⚡ NO detailed processing done - faster!");
                 Console.WriteLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
                 return _db.GetInvoices(_qb.CurrentCompanyName);
@@ -204,71 +137,77 @@ namespace C2B_FBR_Connect.Managers
             {
                 Console.WriteLine($"\n❌ FATAL ERROR in FetchFromQuickBooks:");
                 Console.WriteLine($"   Message: {ex.Message}");
-                Console.WriteLine($"   Stack: {ex.StackTrace}");
-                throw new Exception($"Error fetching invoices from QuickBooks: {ex.Message}", ex);
+                throw new Exception($"Error fetching transactions from QuickBooks: {ex.Message}", ex);
             }
         }
 
+        /// <summary>
+        /// Get full FBR payload for an invoice (with all processing)
+        /// Called by UploadToFBR and ShowInvoiceDetailsAsync
+        /// </summary>
+        public async Task<FBRInvoicePayload> GetFullInvoicePayload(Invoice invoice)
+        {
+            // Check cache first
+            if (_payloadCache.TryGetValue(invoice.QuickBooksInvoiceId, out var cachedPayload))
+            {
+                Console.WriteLine($"✅ Using cached payload for {invoice.InvoiceNumber}");
+                return cachedPayload;
+            }
+
+            // Fetch full details from QuickBooks (this does all the heavy processing)
+            Console.WriteLine($"🔍 Fetching full details for {invoice.InvoiceType ?? "Invoice"}: {invoice.InvoiceNumber}");
+
+            FBRInvoicePayload details = null;
+
+            if (invoice.InvoiceType == "Credit Memo")
+                details = await _qb.GetCreditMemoDetails(invoice.QuickBooksInvoiceId);
+            else
+                details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
+
+            if (details != null)
+            {
+                // Add company details
+                details.SellerNTN = _currentCompany?.SellerNTN ?? "";
+                details.SellerBusinessName = _currentCompany?.CompanyName ?? "";
+                details.SellerProvince = _currentCompany?.SellerProvince ?? "";
+                details.SellerAddress = _currentCompany?.SellerAddress ?? "";
+
+                // Cache for reuse
+                _payloadCache[invoice.QuickBooksInvoiceId] = details;
+
+                Console.WriteLine($"✅ Retrieved {details.Items?.Count ?? 0} items");
+            }
+
+            return details;
+        }
+
+        /// <summary>
+        /// Upload invoice to FBR
+        /// </summary>
         public async Task<FBRResponse> UploadToFBR(Invoice invoice, string token)
         {
             var result = new FBRResponse();
 
             try
             {
-                if (_currentCompany == null)
-                    throw new InvalidOperationException("Company not set. Call SetCompany() first.");
+                ValidateUploadPrerequisites();
 
-                if (string.IsNullOrEmpty(_currentCompany.SellerNTN))
-                    throw new InvalidOperationException("Seller NTN not configured. Please update company settings.");
+                // Get full payload (uses cache if available)
+                var details = await GetFullInvoicePayload(invoice);
 
-                // Get full invoice details from QuickBooks
-                var details = await _qb.GetInvoiceDetails(invoice.QuickBooksInvoiceId);
                 if (details == null)
                 {
                     result.Success = false;
-                    result.ErrorMessage = "Could not retrieve invoice details from QuickBooks";
+                    result.ErrorMessage = $"Could not retrieve {invoice.InvoiceType ?? "invoice"} details from QuickBooks";
                     _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, result.ErrorMessage);
                     return result;
                 }
 
-                // Map FBRInvoicePayload data to Invoice model for complete database storage
-                invoice.TotalAmount = details.TotalAmount;
-                invoice.TaxAmount = details.TaxAmount;
-                invoice.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
-                invoice.InvoiceDate = details.InvoiceDate;
-                invoice.CustomerAddress = details.BuyerAddress;
-                invoice.CustomerPhone = details.BuyerPhone;
-                invoice.CustomerNTN = details.CustomerNTN;
-                invoice.PaymentMode = "Cash"; // You can get this from details if available
-
-                // Map invoice items
-                invoice.Items = details.Items?.Select(i => new InvoiceItem
-                {
-                    ItemName = i.ItemName,
-                    Quantity = (int)i.Quantity,
-                    UnitPrice = i.UnitPrice,
-                    TotalPrice = i.TotalPrice,
-                    TaxRate = i.TaxRate,
-                    SalesTaxAmount = i.SalesTaxAmount,
-                    TotalValue = i.TotalPrice + i.SalesTaxAmount,
-                    HSCode = i.HSCode,
-                    UnitOfMeasure = i.UnitOfMeasure,
-                    RetailPrice = i.RetailPrice,
-                    ExtraTax = i.ExtraTax,
-                    FurtherTax = i.FurtherTax,
-                    FedPayable = i.FedPayable,
-                    SalesTaxWithheldAtSource = i.SalesTaxWithheldAtSource,
-                    Discount = i.Discount,
-                    SaleType = i.SaleType
-                }).ToList() ?? new List<InvoiceItem>();
-
-                // Add company details to FBR payload
-                details.SellerNTN = _currentCompany.SellerNTN;
-                details.SellerBusinessName = _currentCompany.CompanyName;
-                details.SellerProvince = _currentCompany.SellerProvince;
-                details.SellerAddress = _currentCompany.SellerAddress;
+                // Map payload to invoice for database storage
+                MapPayloadToInvoice(invoice, details);
 
                 // Call FBR API
+                Console.WriteLine($"📤 Uploading {invoice.InvoiceType ?? "Invoice"} to FBR...");
                 var response = await _fbr.UploadInvoice(details, token);
                 result = response;
 
@@ -278,35 +217,24 @@ namespace C2B_FBR_Connect.Managers
                     invoice.FBR_QRCode = response.IRN;
                     invoice.Status = "Uploaded";
                     invoice.UploadDate = DateTime.Now;
+                    invoice.ErrorMessage = null;
 
-                    // Save complete invoice data to database (including items)
+                    // Save complete invoice with items
                     _db.SaveInvoiceWithDetails(invoice);
+                    Console.WriteLine($"✅ {invoice.InvoiceType ?? "Invoice"} {invoice.InvoiceNumber} uploaded successfully (IRN: {response.IRN})");
 
-                    // Generate PDF from database data
-                    try
-                    {
-                        var invoiceFromDb = _db.GetInvoiceWithDetails(
-                            invoice.QuickBooksInvoiceId,
-                            _currentCompany.CompanyName);
+                    // Remove from cache
+                    _payloadCache.Remove(invoice.QuickBooksInvoiceId);
 
-                        if (invoiceFromDb != null)
-                        {
-                            string outputPath = GetDefaultPDFPath(invoice);
-                            _pdf.GenerateInvoicePDF(invoiceFromDb, _currentCompany, outputPath);
-                            Console.WriteLine($"PDF generated successfully: {outputPath}");
-                        }
-                    }
-                    catch (Exception pdfEx)
-                    {
-                        Console.WriteLine($"Warning: PDF generation failed: {pdfEx.Message}");
-                        // Don't fail the whole operation if PDF fails
-                    }
+                    // Generate PDF
+                    _ = GeneratePDFAsync(invoice);
                 }
                 else
                 {
                     invoice.Status = "Failed";
                     invoice.ErrorMessage = response.ErrorMessage;
                     _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, response.ErrorMessage);
+                    Console.WriteLine($"❌ Upload failed: {response.ErrorMessage}");
                 }
 
                 return result;
@@ -316,10 +244,14 @@ namespace C2B_FBR_Connect.Managers
                 result.Success = false;
                 result.ErrorMessage = ex.Message;
                 _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, $"Exception: {ex.Message}");
+                Console.WriteLine($"❌ Exception during upload: {ex.Message}");
                 return result;
             }
         }
 
+        /// <summary>
+        /// Upload multiple invoices
+        /// </summary>
         public async Task<Dictionary<string, FBRResponse>> UploadMultipleToFBR(List<Invoice> invoices, string token)
         {
             var results = new Dictionary<string, FBRResponse>();
@@ -333,6 +265,9 @@ namespace C2B_FBR_Connect.Managers
             return results;
         }
 
+        /// <summary>
+        /// Generate PDF
+        /// </summary>
         public void GeneratePDF(Invoice invoice, string outputPath)
         {
             try
@@ -340,7 +275,6 @@ namespace C2B_FBR_Connect.Managers
                 if (_currentCompany == null)
                     throw new InvalidOperationException("Company not set. Call SetCompany() first.");
 
-                // Fetch complete invoice data from database
                 var invoiceFromDb = _db.GetInvoiceWithDetails(
                     invoice.QuickBooksInvoiceId,
                     _currentCompany.CompanyName);
@@ -377,12 +311,87 @@ namespace C2B_FBR_Connect.Managers
             foreach (var invoice in failedInvoices)
             {
                 var response = await UploadToFBR(invoice, token);
-
                 if (response.Success)
                     successCount++;
             }
 
             return successCount;
+        }
+
+        #region Private Helper Methods
+
+        private void MapPayloadToInvoice(Invoice invoice, FBRInvoicePayload details)
+        {
+            invoice.TotalAmount = details.TotalAmount;
+            invoice.TaxAmount = details.TaxAmount;
+            invoice.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
+            invoice.InvoiceDate = details.InvoiceDate;
+            invoice.CustomerAddress = details.BuyerAddress;
+            invoice.CustomerPhone = details.BuyerPhone;
+            invoice.CustomerNTN = details.CustomerNTN;
+            invoice.CustomerType = details.BuyerRegistrationType;
+            invoice.CustomerEmail = details.BuyerEmail ?? "";
+            invoice.PaymentMode = "Cash";
+
+            invoice.Items = details.Items?.Select(i => new InvoiceItem
+            {
+                ItemName = i.ItemName ?? "",
+                ItemDescription = i.ItemName ?? "",
+                Quantity = i.Quantity,
+                UnitPrice = i.UnitPrice,
+                TotalPrice = i.TotalPrice,
+                NetAmount = i.NetAmount,
+                TaxRate = i.TaxRate,
+                SalesTaxAmount = i.SalesTaxAmount,
+                TotalValue = i.TotalValue,
+                HSCode = i.HSCode ?? "",
+                UnitOfMeasure = i.UnitOfMeasure ?? "",
+                RetailPrice = i.RetailPrice,
+                ExtraTax = i.ExtraTax,
+                FurtherTax = i.FurtherTax,
+                FedPayable = i.FedPayable,
+                SalesTaxWithheldAtSource = i.SalesTaxWithheldAtSource,
+                Discount = i.Discount,
+                SaleType = i.SaleType ?? "Goods at standard rate (default)",
+                SroScheduleNo = i.SroScheduleNo ?? "",
+                SroItemSerialNo = i.SroItemSerialNo ?? ""
+            }).ToList() ?? new List<InvoiceItem>();
+        }
+
+        private void ValidateUploadPrerequisites()
+        {
+            if (_currentCompany == null)
+                throw new InvalidOperationException("Company not set. Call SetCompany() first.");
+
+            if (string.IsNullOrEmpty(_currentCompany.SellerNTN))
+                throw new InvalidOperationException("Seller NTN not configured.");
+
+            if (string.IsNullOrEmpty(_currentCompany.FBRToken))
+                throw new InvalidOperationException("FBR Token not configured.");
+        }
+
+        private async Task GeneratePDFAsync(Invoice invoice)
+        {
+            try
+            {
+                await Task.Run(() =>
+                {
+                    var invoiceFromDb = _db.GetInvoiceWithDetails(
+                        invoice.QuickBooksInvoiceId,
+                        _currentCompany.CompanyName);
+
+                    if (invoiceFromDb != null)
+                    {
+                        string outputPath = GetDefaultPDFPath(invoice);
+                        _pdf.GenerateInvoicePDF(invoiceFromDb, _currentCompany, outputPath);
+                        Console.WriteLine($"📄 PDF generated: {outputPath}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"⚠️ PDF generation failed: {ex.Message}");
+            }
         }
 
         private string GetDefaultPDFPath(Invoice invoice)
@@ -396,5 +405,7 @@ namespace C2B_FBR_Connect.Managers
             string fileName = $"Invoice_{invoice.InvoiceNumber}_{DateTime.Now:yyyyMMdd_HHmmss}.pdf";
             return Path.Combine(invoiceFolder, fileName);
         }
+
+        #endregion
     }
 }

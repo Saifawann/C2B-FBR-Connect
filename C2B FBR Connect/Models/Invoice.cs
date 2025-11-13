@@ -10,6 +10,7 @@ namespace C2B_FBR_Connect.Models
         public string CompanyName { get; set; }
         public string QuickBooksInvoiceId { get; set; }
         public string InvoiceNumber { get; set; }
+        public string InvoiceType { get; set; }
 
         // Customer Information
         public string CustomerName { get; set; }

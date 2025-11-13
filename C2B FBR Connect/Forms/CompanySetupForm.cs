@@ -1,5 +1,6 @@
 ﻿using C2B_FBR_Connect.Models;
 using C2B_FBR_Connect.Services;
+using C2B_FBR_Connect.Utilities;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -32,6 +33,13 @@ namespace C2B_FBR_Connect.Forms
         private Label lblInstructions;
         private GroupBox grpSellerInfo;
 
+        // Logo controls
+        private GroupBox grpLogo;
+        private PictureBox picLogo;
+        private Button btnSelectLogo;
+        private Button btnClearLogo;
+        private Label lblLogoInfo;
+
         private Dictionary<string, int> _provinceCodeMap = new Dictionary<string, int>();
         private FBRApiService _fbrApi;
         public Company Company { get; private set; }
@@ -50,15 +58,14 @@ namespace C2B_FBR_Connect.Forms
             {
                 txtFBRToken.Text = existingCompany.FBRToken ?? "";
                 txtSellerNTN.Text = existingCompany.SellerNTN ?? "";
-
-                // Auto-populate from QuickBooks company info (read-only for address)
                 txtSellerAddress.Text = existingCompany.SellerAddress ?? "Fetched from QuickBooks";
-
-                // Province will be set after loading from API
                 txtSellerPhone.Text = existingCompany.SellerPhone ?? "";
                 txtSellerEmail.Text = existingCompany.SellerEmail ?? "";
 
                 Company = existingCompany;
+
+                // Load existing logo if available
+                LoadExistingLogo();
             }
             else
             {
@@ -73,7 +80,7 @@ namespace C2B_FBR_Connect.Forms
         private void SetupCustomUI()
         {
             this.Text = "Company FBR Setup";
-            this.Size = new Size(500, 460);
+            this.Size = new Size(500, 600);  
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
@@ -115,11 +122,72 @@ namespace C2B_FBR_Connect.Forms
                 UseSystemPasswordChar = false
             };
 
+            // ─── Company Logo Group ─────────────────────────────────────────────
+            grpLogo = new GroupBox
+            {
+                Text = "Company Logo",
+                Location = new Point(12, 125),
+                Size = new Size(460, 120),
+                Font = new Font("Arial", 9F, FontStyle.Bold)
+            };
+
+            picLogo = new PictureBox
+            {
+                Location = new Point(12, 25),
+                Size = new Size(150, 80),
+                BorderStyle = BorderStyle.FixedSingle,
+                SizeMode = PictureBoxSizeMode.Zoom,
+                BackColor = Color.White
+            };
+
+            btnSelectLogo = new Button
+            {
+                Text = "Select Logo",
+                Location = new Point(175, 30),
+                Size = new Size(100, 32),
+                BackColor = Color.FromArgb(33, 150, 243),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Arial", 9F),
+                Cursor = Cursors.Hand
+            };
+            btnSelectLogo.FlatAppearance.BorderSize = 0;
+            btnSelectLogo.Click += BtnSelectLogo_Click;
+
+            btnClearLogo = new Button
+            {
+                Text = "Clear Logo",
+                Location = new Point(285, 30),
+                Size = new Size(100, 32),
+                BackColor = Color.FromArgb(244, 67, 54),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Arial", 9F),
+                Enabled = false,
+                Cursor = Cursors.Hand
+            };
+            btnClearLogo.FlatAppearance.BorderSize = 0;
+            btnClearLogo.Click += BtnClearLogo_Click;
+
+            lblLogoInfo = new Label
+            {
+                Text = "No logo selected",
+                Location = new Point(175, 70),
+                Size = new Size(270, 35),
+                Font = new Font("Arial", 8F, FontStyle.Italic),
+                ForeColor = Color.Gray
+            };
+
+            grpLogo.Controls.Add(picLogo);
+            grpLogo.Controls.Add(btnSelectLogo);
+            grpLogo.Controls.Add(btnClearLogo);
+            grpLogo.Controls.Add(lblLogoInfo);
+
             // ─── Seller Info Group ─────────────────────────────────────────────
             grpSellerInfo = new GroupBox
             {
                 Text = "Seller Information",
-                Location = new Point(12, 125),
+                Location = new Point(12, 255),  // Adjusted position
                 Size = new Size(460, 250),
                 Font = new Font("Arial", 9F, FontStyle.Bold)
             };
@@ -234,37 +302,179 @@ namespace C2B_FBR_Connect.Forms
             btnSave = new Button
             {
                 Text = "Save",
-                Location = new Point(285, 385),
+                Location = new Point(285, 515),  // Adjusted position
                 Size = new Size(85, 35),
                 DialogResult = DialogResult.OK,
                 BackColor = Color.FromArgb(46, 125, 50),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F, FontStyle.Bold)
+                Font = new Font("Arial", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand
             };
+            btnSave.FlatAppearance.BorderSize = 0;
             btnSave.Click += BtnSave_Click;
 
             btnCancel = new Button
             {
                 Text = "Cancel",
-                Location = new Point(375, 385),
+                Location = new Point(375, 515),  // Adjusted position
                 Size = new Size(85, 35),
                 DialogResult = DialogResult.Cancel,
                 BackColor = Color.FromArgb(211, 47, 47),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F, FontStyle.Bold)
+                Font = new Font("Arial", 9F, FontStyle.Bold),
+                Cursor = Cursors.Hand
             };
+            btnCancel.FlatAppearance.BorderSize = 0;
 
             this.Controls.Add(lblInstructions);
             this.Controls.Add(lblCompanyName);
             this.Controls.Add(txtCompanyName);
             this.Controls.Add(lblFBRToken);
             this.Controls.Add(txtFBRToken);
+            this.Controls.Add(grpLogo);
             this.Controls.Add(grpSellerInfo);
             this.Controls.Add(btnSave);
             this.Controls.Add(btnCancel);
         }
+
+        #region Logo Management
+
+        private void BtnSelectLogo_Click(object sender, EventArgs e)
+        {
+            using (OpenFileDialog openFileDialog = new OpenFileDialog())
+            {
+                openFileDialog.Filter = "Image Files (*.jpg;*.jpeg;*.png;*.bmp;*.gif)|*.jpg;*.jpeg;*.png;*.bmp;*.gif";
+                openFileDialog.Title = "Select Company Logo";
+                openFileDialog.InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+
+                if (openFileDialog.ShowDialog() == DialogResult.OK)
+                {
+                    try
+                    {
+                        // Validate image file
+                        if (!ImageHelper.IsValidImageFile(openFileDialog.FileName))
+                        {
+                            MessageBox.Show("The selected file is not a valid image format.",
+                                "Invalid Image",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+                            return;
+                        }
+
+                        // Get image dimensions and file size for info
+                        var dimensions = ImageHelper.GetImageDimensions(openFileDialog.FileName);
+                        var fileSize = ImageHelper.GetFileSizeFormatted(openFileDialog.FileName);
+
+                        // Load, resize, and convert to bytes
+                        Company.LogoImage = ImageHelper.LoadAndResizeImage(openFileDialog.FileName, 500, 500);
+
+                        // Display in PictureBox
+                        DisplayLogo(Company.LogoImage);
+
+                        // Update info label
+                        lblLogoInfo.Text = $"Logo loaded successfully\nOriginal: {dimensions.width}x{dimensions.height} ({fileSize})";
+                        lblLogoInfo.ForeColor = Color.Green;
+
+                        // Enable clear button
+                        btnClearLogo.Enabled = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Error loading image:\n{ex.Message}",
+                            "Error",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+
+                        ClearLogoDisplay();
+                    }
+                }
+            }
+        }
+
+        private void BtnClearLogo_Click(object sender, EventArgs e)
+        {
+            DialogResult result = MessageBox.Show(
+                "Are you sure you want to remove the company logo?",
+                "Confirm Clear Logo",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+
+            if (result == DialogResult.Yes)
+            {
+                ClearLogoDisplay();
+                Company.LogoImage = null;
+
+                MessageBox.Show("Logo removed successfully.",
+                    "Logo Cleared",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            }
+        }
+
+        private void LoadExistingLogo()
+        {
+            if (Company?.LogoImage != null && Company.LogoImage.Length > 0)
+            {
+                try
+                {
+                    DisplayLogo(Company.LogoImage);
+
+                    // Calculate approximate size
+                    double sizeKB = Company.LogoImage.Length / 1024.0;
+                    string sizeText = sizeKB < 1024
+                        ? $"{sizeKB:0.##} KB"
+                        : $"{sizeKB / 1024:0.##} MB";
+
+                    lblLogoInfo.Text = $"Current logo loaded\nSize: {sizeText}";
+                    lblLogoInfo.ForeColor = Color.Green;
+                    btnClearLogo.Enabled = true;
+                }
+                catch (Exception ex)
+                {
+                    lblLogoInfo.Text = "Error loading saved logo";
+                    lblLogoInfo.ForeColor = Color.Red;
+                    btnClearLogo.Enabled = false;
+
+                    System.Diagnostics.Debug.WriteLine($"Error loading logo: {ex.Message}");
+                }
+            }
+            else
+            {
+                ClearLogoDisplay();
+            }
+        }
+
+        private void DisplayLogo(byte[] logoBytes)
+        {
+            // Dispose previous image to free memory
+            if (picLogo.Image != null)
+            {
+                picLogo.Image.Dispose();
+                picLogo.Image = null;
+            }
+
+            // Load new image
+            picLogo.Image = ImageHelper.ByteArrayToImage(logoBytes);
+        }
+
+        private void ClearLogoDisplay()
+        {
+            if (picLogo.Image != null)
+            {
+                picLogo.Image.Dispose();
+                picLogo.Image = null;
+            }
+
+            lblLogoInfo.Text = "No logo selected";
+            lblLogoInfo.ForeColor = Color.Gray;
+            btnClearLogo.Enabled = false;
+        }
+
+        #endregion
+
+        #region Province Management
 
         private async void LoadProvincesAsync(string selectedProvince = null)
         {
@@ -353,6 +563,10 @@ namespace C2B_FBR_Connect.Forms
             return 0;
         }
 
+        #endregion
+
+        #region Save & Validation
+
         private void BtnSave_Click(object sender, EventArgs e)
         {
             // Validate FBR Token
@@ -394,15 +608,34 @@ namespace C2B_FBR_Connect.Forms
             Company.SellerProvince = cboSellerProvince.SelectedItem.ToString();
             Company.SellerPhone = txtSellerPhone.Text?.Trim();
             Company.SellerEmail = txtSellerEmail.Text?.Trim();
-
-
-            // SellerAddress is auto-populated from QuickBooks
             Company.SellerAddress = txtSellerAddress.Text.Trim();
+
+            // Logo is already set in Company.LogoImage via BtnSelectLogo_Click
+            // or cleared via BtnClearLogo_Click
 
             Company.ModifiedDate = DateTime.Now;
 
             // The Company object is now updated and will be returned to the caller
             // The caller MUST save it using DatabaseService.SaveCompany(Company)
         }
+
+        #endregion
+
+        #region Form Cleanup
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Dispose image to free memory
+                if (picLogo?.Image != null)
+                {
+                    picLogo.Image.Dispose();
+                }
+            }
+            base.Dispose(disposing);
+        }
+
+        #endregion
     }
 }
