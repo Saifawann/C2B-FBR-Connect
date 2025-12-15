@@ -4,6 +4,8 @@ using C2B_FBR_Connect.Services;
 using C2B_FBR_Connect.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
+using System.Diagnostics.Metrics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -579,6 +581,7 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
+
         private void ConfigureVisibleColumns()
         {
             var columnConfig = new Dictionary<string, (string Header, int Weight, string Format, DataGridViewContentAlignment? Alignment)>
@@ -988,10 +991,16 @@ namespace C2B_FBR_Connect.Forms
                 }
 
                 var fbrPayload = _fbr.BuildFBRPayload(details);
-                var apiPayload = _fbr.ConvertToApiPayload(fbrPayload);
+
+                // ✅ GET ENVIRONMENT FROM CURRENT COMPANY
+                string environment = _currentCompany?.Environment ?? "Sandbox";
+
+                // ✅ PASS ENVIRONMENT TO ConvertToApiPayload
+                var apiPayload = _fbr.ConvertToApiPayload(fbrPayload, environment);
+
                 string json = Newtonsoft.Json.JsonConvert.SerializeObject(apiPayload, Newtonsoft.Json.Formatting.Indented);
 
-                var validationErrors = ValidateInvoiceDetails(details); // Pass details, not fbrPayload
+                var validationErrors = ValidateInvoiceDetails(details);
                 ShowInvoiceDetailsDialog(invoice.InvoiceNumber, json, validationErrors);
             }
             catch (Exception ex)

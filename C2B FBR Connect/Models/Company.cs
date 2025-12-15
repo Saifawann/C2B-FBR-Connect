@@ -10,6 +10,7 @@ namespace C2B_FBR_Connect.Models
     {
         public int Id { get; set; }
         public string CompanyName { get; set; }
+        public string Environment { get; set; } = "Sandbox";
         public string FBRToken { get; set; }
 
         // Seller Information for FBR

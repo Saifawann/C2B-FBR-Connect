@@ -31,6 +31,8 @@ namespace C2B_FBR_Connect.Forms
         private Label lblSellerPhone;
         private Label lblSellerEmail;
         private Label lblInstructions;
+        private Label lblEnvironment;
+        private ComboBox cboEnvironment;
         private GroupBox grpSellerInfo;
 
         // Logo controls
@@ -61,6 +63,13 @@ namespace C2B_FBR_Connect.Forms
                 txtSellerAddress.Text = existingCompany.SellerAddress ?? "Fetched from QuickBooks";
                 txtSellerPhone.Text = existingCompany.SellerPhone ?? "";
                 txtSellerEmail.Text = existingCompany.SellerEmail ?? "";
+
+                if (!string.IsNullOrEmpty(existingCompany.Environment))
+                {
+                    int envIndex = cboEnvironment.FindStringExact(existingCompany.Environment);
+                    if (envIndex >= 0)
+                        cboEnvironment.SelectedIndex = envIndex;
+                }
 
                 Company = existingCompany;
 
@@ -178,6 +187,25 @@ namespace C2B_FBR_Connect.Forms
                 ForeColor = Color.Gray
             };
 
+            lblEnvironment = new Label
+            {
+                Text = "Environment:*",
+                Location = new Point(12, 125),
+                Size = new Size(120, 23)
+            };
+
+            cboEnvironment = new ComboBox
+            {
+                Location = new Point(140, 122),
+                Size = new Size(320, 23),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Arial", 9F)
+            };
+            cboEnvironment.Items.AddRange(new object[] { "Sandbox", "Production" });
+            cboEnvironment.SelectedIndex = 0; // Default to Production
+
+            this.Controls.Add(lblEnvironment);
+            this.Controls.Add(cboEnvironment);
             grpLogo.Controls.Add(picLogo);
             grpLogo.Controls.Add(btnSelectLogo);
             grpLogo.Controls.Add(btnClearLogo);
@@ -590,6 +618,16 @@ namespace C2B_FBR_Connect.Forms
                 return;
             }
 
+            if (cboEnvironment.SelectedItem == null)
+            {
+                MessageBox.Show("Please select an environment (Production or Sandbox).",
+                    "Validation Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                cboEnvironment.Focus();
+                this.DialogResult = DialogResult.None;
+                return;
+            }
+
             // Validate Seller Province
             if (cboSellerProvince.SelectedItem == null)
             {
@@ -603,6 +641,7 @@ namespace C2B_FBR_Connect.Forms
 
             // Save information to Company object
             Company.CompanyName = txtCompanyName.Text.Trim();
+            Company.Environment = cboEnvironment.SelectedItem.ToString();
             Company.FBRToken = txtFBRToken.Text.Trim();
             Company.SellerNTN = txtSellerNTN.Text.Trim();
             Company.SellerProvince = cboSellerProvince.SelectedItem.ToString();

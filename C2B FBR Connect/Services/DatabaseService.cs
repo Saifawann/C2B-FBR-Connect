@@ -57,6 +57,7 @@ namespace C2B_FBR_Connect.Services
                         SellerPhone TEXT,
                         SellerEmail TEXT,
                         LogoImage BLOB,
+                        Environment TEXT DEFAULT 'Sandbox',
                         CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
                         ModifiedDate DATETIME
                     );";
@@ -136,6 +137,7 @@ namespace C2B_FBR_Connect.Services
 
                 Console.WriteLine("✅ Database initialized successfully");
             }
+            MigrateDatabase();
         }
 
         private void ExecuteNonQuery(SQLiteConnection conn, string sql)
@@ -200,6 +202,7 @@ namespace C2B_FBR_Connect.Services
                         SellerPhone = reader["SellerPhone"]?.ToString(),
                         SellerEmail = reader["SellerEmail"]?.ToString(),
                         LogoImage = reader["LogoImage"] != DBNull.Value ? (byte[])reader["LogoImage"] : null,
+                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox", // ✅ ADD THIS
                         CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
                         ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null
                     };
@@ -233,6 +236,7 @@ namespace C2B_FBR_Connect.Services
                         SellerProvince = reader["SellerProvince"]?.ToString(),
                         SellerPhone = reader["SellerPhone"]?.ToString(),
                         SellerEmail = reader["SellerEmail"]?.ToString(),
+                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox", // ✅ ADD THIS
                         CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
                         ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null
                     });
@@ -266,6 +270,7 @@ namespace C2B_FBR_Connect.Services
                             SellerPhone = @phone,
                             SellerEmail = @email,
                             LogoImage = @logoImage,
+                            Environment = @environment,
                             ModifiedDate = @modified
                         WHERE CompanyName = @name", conn);
 
@@ -274,14 +279,15 @@ namespace C2B_FBR_Connect.Services
                 else
                 {
                     cmd = new SQLiteCommand(@"
-                        INSERT INTO Companies (CompanyName, FBRToken, SellerNTN, SellerAddress, SellerProvince, SellerPhone, SellerEmail, LogoImage, CreatedDate)
-                        VALUES (@name, @token, @ntn, @address, @province, @phone, @email, @logoImage, @created)", conn);
+                        INSERT INTO Companies (CompanyName, FBRToken, SellerNTN, SellerAddress, SellerProvince, SellerPhone, SellerEmail, LogoImage, Environment, CreatedDate)
+                        VALUES (@name, @token, @ntn, @address, @province, @phone, @email, @logoImage, @environment, @created)", conn);
 
                     cmd.Parameters.AddWithValue("@created", DateTime.Now);
                 }
 
                 cmd.Parameters.AddWithValue("@name", company.CompanyName);
                 cmd.Parameters.AddWithValue("@token", company.FBRToken);
+                cmd.Parameters.AddWithValue("@environment", company.Environment ?? "Sandbox");
                 cmd.Parameters.AddWithValue("@ntn", company.SellerNTN ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@address", company.SellerAddress ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@province", company.SellerProvince ?? (object)DBNull.Value);
@@ -308,6 +314,8 @@ namespace C2B_FBR_Connect.Services
                 return true;
             }, "DeleteCompany");
         }
+
+
 
         #endregion
 
@@ -1210,5 +1218,46 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
+
+        # region Migrations
+        private void MigrateDatabase()
+        {
+            lock (_lockObject)
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                // Check if Environment column exists
+                var checkColumnCmd = new SQLiteCommand(
+                    "PRAGMA table_info(Companies);", conn);
+
+                bool hasEnvironmentColumn = false;
+                using (var reader = checkColumnCmd.ExecuteReader())
+                {
+                    while (reader.Read())
+                    {
+                        string columnName = reader["name"].ToString();
+                        if (columnName == "Environment")
+                        {
+                            hasEnvironmentColumn = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Add Environment column if it doesn't exist
+                if (!hasEnvironmentColumn)
+                {
+                    Console.WriteLine("⚙️ Adding Environment column to Companies table...");
+                    var alterCmd = new SQLiteCommand(
+                        "ALTER TABLE Companies ADD COLUMN Environment TEXT DEFAULT 'Sandbox';", conn);
+                    alterCmd.ExecuteNonQuery();
+                    Console.WriteLine("✅ Environment column added successfully");
+                }
+            }
+        }
+        #endregion
+
+
     }
 }

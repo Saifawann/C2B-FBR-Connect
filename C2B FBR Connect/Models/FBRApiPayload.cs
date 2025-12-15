@@ -42,7 +42,7 @@ namespace C2B_FBR_Connect.Models
         [JsonProperty("invoiceRefNo")]
         public string InvoiceRefNo { get; set; }
 
-        [JsonProperty("scenarioId")]
+        [JsonProperty("scenarioId", NullValueHandling = NullValueHandling.Ignore)]
         public string ScenarioId { get; set; }
 
         [JsonProperty("buyerRegistrationType")]

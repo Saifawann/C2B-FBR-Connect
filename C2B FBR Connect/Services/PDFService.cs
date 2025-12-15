@@ -52,8 +52,12 @@ namespace C2B_FBR_Connect.Services
                 document = new Document(pdfDoc);
                 document.SetMargins(15, 15, 100, 15);  // Bottom margin for FBR section
 
+                // Create fonts
                 var boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
                 var normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
+
+                // Add watermark if needed (you can add Status property to Invoice model)
+                // AddWatermark(pdfDoc, "DRAFT"); // Uncomment if you want watermark
 
                 BuildPDFContent(document, invoice, company, boldFont, normalFont);
             }
@@ -77,6 +81,30 @@ namespace C2B_FBR_Connect.Services
             var dir = System.IO.Path.GetDirectoryName(path);
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
+        }
+
+        private void AddWatermark(PdfDocument pdfDoc, string text)
+        {
+            // This will be applied to all pages
+            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
+            {
+                PdfPage page = pdfDoc.GetPage(i);
+                PdfCanvas canvas = new PdfCanvas(page);
+                canvas.SaveState();
+
+                // Set transparency
+                var gs = new iText.Kernel.Pdf.Extgstate.PdfExtGState();
+                gs.SetFillOpacity(0.3f);
+                canvas.SetExtGState(gs);
+
+                canvas.SetFillColor(new DeviceRgb(200, 200, 200));
+                canvas.BeginText();
+                canvas.SetFontAndSize(PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD), 60);
+                canvas.MoveText(page.GetPageSize().GetWidth() / 2 - 100, page.GetPageSize().GetHeight() / 2);
+                canvas.ShowText(text);
+                canvas.EndText();
+                canvas.RestoreState();
+            }
         }
 
         private void BuildPDFContent(Document doc, Invoice invoice, Company company,
@@ -836,5 +864,20 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
+    }
+
+    // Extension class for additional border
+    public class BottomBorder : SolidBorder
+    {
+        public BottomBorder(iText.Kernel.Colors.Color color, float width) : base(color, width) { }
+
+        public override void Draw(PdfCanvas canvas, float x1, float y1, float x2, float y2,
+            Border.Side defaultSide, float borderWidthBefore, float borderWidthAfter)
+        {
+            if (defaultSide == Border.Side.BOTTOM)
+            {
+                base.Draw(canvas, x1, y1, x2, y2, defaultSide, borderWidthBefore, borderWidthAfter);
+            }
+        }
     }
 }

@@ -206,9 +206,11 @@ namespace C2B_FBR_Connect.Managers
                 // Map payload to invoice for database storage
                 MapPayloadToInvoice(invoice, details);
 
+                string environment = _currentCompany?.Environment ?? "Sandbox";
+
                 // Call FBR API
                 Console.WriteLine($"📤 Uploading {invoice.InvoiceType ?? "Invoice"} to FBR...");
-                var response = await _fbr.UploadInvoice(details, token);
+                var response = await _fbr.UploadInvoice(details, token, environment);
                 result = response;
 
                 if (response.Success)
