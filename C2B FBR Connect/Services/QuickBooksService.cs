@@ -754,6 +754,10 @@ namespace C2B_FBR_Connect.Services
 
                 var invoiceLine = ConvertCreditMemoLineToInvoiceLine(line);
 
+                string lineType = isDiscount ? "DISCOUNT" : isSubtotal ? "SUBTOTAL" : "ITEM";
+
+                LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
+
                 lineItems.Add(new LineItemContext
                 {
                     Index = i,
@@ -1071,6 +1075,7 @@ namespace C2B_FBR_Connect.Services
 
             computedTotalValue = retailPrice + salesTaxAmount;
         }
+
 
         private void CalculateSRO297Tax(decimal netAmount, double effectiveTaxRate, out decimal displayTaxRate, out decimal salesTaxAmount,
             out decimal furtherTax, out string rateString, out decimal computedTotalValue)

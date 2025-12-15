@@ -4,6 +4,8 @@ using C2B_FBR_Connect.Services;
 using C2B_FBR_Connect.Utilities;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
+using System.Diagnostics.Metrics;
 using System.Drawing;
 using System.Linq;
 using System.Text;
@@ -578,6 +580,7 @@ namespace C2B_FBR_Connect.Forms
                     dgvInvoices.Columns[col].Visible = false;
             }
         }
+
 
         private void ConfigureVisibleColumns()
         {
