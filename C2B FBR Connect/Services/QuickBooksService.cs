@@ -754,6 +754,10 @@ namespace C2B_FBR_Connect.Services
 
                 var invoiceLine = ConvertCreditMemoLineToInvoiceLine(line);
 
+                string lineType = isDiscount ? "DISCOUNT" : isSubtotal ? "SUBTOTAL" : "ITEM";
+
+                LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
+
                 lineItems.Add(new LineItemContext
                 {
                     Index = i,
