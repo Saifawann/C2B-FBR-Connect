@@ -19,6 +19,7 @@ namespace C2B_FBR_Connect.Models
         public string SellerProvince { get; set; }
         public string SellerPhone { get; set; }
         public string SellerEmail { get; set; }
+        public string StrNo { get; set; }
 
         public byte[] LogoImage { get; set; }
 

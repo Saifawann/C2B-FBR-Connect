@@ -3,6 +3,9 @@ using System.Collections.Generic;
 
 namespace C2B_FBR_Connect.Models
 {
+    /// <summary>
+    /// Fully normalized Invoice model - customer data accessed via CustomerId reference
+    /// </summary>
     public class Invoice
     {
         // Primary Keys & Identifiers
@@ -12,13 +15,14 @@ namespace C2B_FBR_Connect.Models
         public string InvoiceNumber { get; set; }
         public string InvoiceType { get; set; }
 
-        // Customer Information
-        public string CustomerName { get; set; }
-        public string CustomerNTN { get; set; }
-        public string CustomerAddress { get; set; }
-        public string CustomerPhone { get; set; }
-        public string CustomerEmail { get; set; }
-        public string CustomerType { get; set; } 
+        // ✅ Customer Reference (Foreign Key)
+        public int CustomerId { get; set; }
+
+        // ✅ Navigation Property (populated via JOIN or separate query)
+        public Customer Customer { get; set; }
+
+        // ✅ QuickBooks Customer ID (used for fetching/syncing)
+        public string QuickBooksCustomerId { get; set; }
 
         // Invoice Financial Details
         public decimal Amount { get; set; }
@@ -43,12 +47,20 @@ namespace C2B_FBR_Connect.Models
 
         // Invoice Line Items
         public List<InvoiceItem> Items { get; set; } = new List<InvoiceItem>();
+
+        // ✅ Helper Properties (computed from Customer navigation property)
+        public string CustomerName => Customer?.CustomerName ?? "Unknown";
+        public string CustomerNTN => Customer?.CustomerNTN;
+        public string CustomerAddress => Customer?.CustomerAddress;
+        public string CustomerPhone => Customer?.CustomerPhone;
+        public string CustomerEmail => Customer?.CustomerEmail;
+        public string CustomerType => Customer?.CustomerType ?? "Unregistered";
     }
+
     public enum InvoiceStatus
     {
         Pending,
         Uploaded,
         Failed
     }
-
 }

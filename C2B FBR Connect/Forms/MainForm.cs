@@ -21,14 +21,14 @@ namespace C2B_FBR_Connect.Forms
 
         private DataGridView dgvInvoices;
         private Button btnFetchInvoices, btnUploadSelected, btnGeneratePDF, btnCompanySetup, btnRefresh;
-        private Label lblCompanyName, lblFilter, lblSearch;
+        private Label lblCompanyName, lblFilter, lblSearch, lblEnvironment;
         private ComboBox cboStatusFilter;
         private TextBox txtSearchInvoice;
         private StatusStrip statusStrip;
         private ToolStripStatusLabel statusLabel, statusStats;
         private ToolStripProgressBar progressBar;
-        private Panel topPanel, buttonPanel;
-        private PictureBox picCompanyLogo;  // ✅ Added logo PictureBox
+        private Panel topPanel, buttonPanel, filterPanel;
+        private PictureBox picCompanyLogo;
 
         private readonly DatabaseService _db;
         private readonly QuickBooksService _qb;
@@ -46,6 +46,15 @@ namespace C2B_FBR_Connect.Forms
         private System.Windows.Forms.Timer _searchDebounceTimer;
         private CancellationTokenSource _filterCancellationTokenSource;
         private const int DEBOUNCE_DELAY_MS = 300;
+
+        // Colors
+        private readonly Color PrimaryColor = Color.FromArgb(45, 62, 80);      // Dark blue-gray
+        private readonly Color SecondaryColor = Color.FromArgb(52, 152, 219);  // Blue
+        private readonly Color SuccessColor = Color.FromArgb(46, 204, 113);    // Green
+        private readonly Color WarningColor = Color.FromArgb(241, 196, 15);    // Yellow
+        private readonly Color DangerColor = Color.FromArgb(231, 76, 60);      // Red
+        private readonly Color LightBgColor = Color.FromArgb(248, 249, 250);   // Light gray
+        private readonly Color BorderColor = Color.FromArgb(222, 226, 230);    // Border gray
 
         #endregion
 
@@ -88,10 +97,16 @@ namespace C2B_FBR_Connect.Forms
             ConfigureForm();
             CreateTopPanel();
             CreateButtonPanel();
+            CreateFilterPanel();
             CreateDataGridView();
             CreateStatusStrip();
 
-            Controls.AddRange(new Control[] { dgvInvoices, buttonPanel, topPanel, statusStrip });
+            // Add controls in correct order (bottom to top for docking)
+            Controls.Add(dgvInvoices);
+            Controls.Add(filterPanel);
+            Controls.Add(buttonPanel);
+            Controls.Add(topPanel);
+            Controls.Add(statusStrip);
 
             ResumeLayout(false);
             PerformLayout();
@@ -99,10 +114,11 @@ namespace C2B_FBR_Connect.Forms
 
         private void ConfigureForm()
         {
-            Text = "C2B Smart App - Digital Invoicing System";
-            Size = new Size(1400, 750);
+            Text = "C2B Smart App - FBR Digital Invoicing System";
+            Size = new Size(1450, 800);
             StartPosition = FormStartPosition.CenterScreen;
-            MinimumSize = new Size(1000, 600);
+            MinimumSize = new Size(1100, 650);
+            BackColor = LightBgColor;
 
             try
             {
@@ -115,137 +131,243 @@ namespace C2B_FBR_Connect.Forms
         {
             topPanel = new Panel
             {
-                Height = 70,  // ✅ Increased height for logo
+                Height = 70,
                 Dock = DockStyle.Top,
-                BackColor = Color.FromArgb(245, 245, 245),
-                Padding = new Padding(12, 10, 12, 10)
+                BackColor = PrimaryColor,
+                Padding = new Padding(15, 12, 15, 12)
             };
 
-            // ✅ Company Logo PictureBox
+            // Company Logo
             picCompanyLogo = new PictureBox
             {
-                Location = new Point(12, 10),
-                Size = new Size(150, 50),
+                Location = new Point(15, 10),
+                Size = new Size(140, 50),
                 SizeMode = PictureBoxSizeMode.Zoom,
                 BorderStyle = BorderStyle.None,
                 BackColor = Color.Transparent
             };
 
-            // ✅ Company Name Label (adjusted position)
+            // Company Name Label
             lblCompanyName = new Label
             {
                 Text = "No QuickBooks Company Connected",
-                Location = new Point(175, 10),  // Positioned after logo
+                Location = new Point(170, 8),
                 AutoSize = false,
-                Height = 50,
-                Width = topPanel.Width - 200,
-                Font = new Font("Segoe UI", 11F, FontStyle.Bold),
-                ForeColor = Color.DarkBlue,
+                Height = 32,
+                Width = 600,
+                Font = new Font("Segoe UI Semibold", 14F),
+                ForeColor = Color.White,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                Anchor = AnchorStyles.Top | AnchorStyles.Left
             };
+
+            // Environment Badge
+            lblEnvironment = new Label
+            {
+                Text = "SANDBOX",
+                AutoSize = true,
+                Location = new Point(170, 42),
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold),
+                ForeColor = Color.Black,
+                BackColor = WarningColor,
+                Padding = new Padding(6, 2, 6, 2),
+                Visible = false
+            };
+
+            // Company Setup button in header
+            var btnHeaderSetup = new Button
+            {
+                Text = "⚙ Settings",
+                Size = new Size(100, 36),
+                Location = new Point(topPanel.Width - 120, 17),
+                BackColor = Color.FromArgb(255, 255, 255, 40),
+                ForeColor = Color.Black,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F),
+                Cursor = Cursors.Hand,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            btnHeaderSetup.FlatAppearance.BorderColor = Color.FromArgb(255, 255, 255, 80);
+            btnHeaderSetup.FlatAppearance.BorderSize = 1;
+            btnHeaderSetup.FlatAppearance.MouseOverBackColor = Color.FromArgb(255, 255, 255, 60);
+            btnHeaderSetup.Click += (s, e) => ShowCompanySetup();
 
             topPanel.Controls.Add(picCompanyLogo);
             topPanel.Controls.Add(lblCompanyName);
+            topPanel.Controls.Add(lblEnvironment);
+            topPanel.Controls.Add(btnHeaderSetup);
         }
 
         private void CreateButtonPanel()
         {
             buttonPanel = new Panel
             {
-                Height = 95,
+                Height = 60,
                 Dock = DockStyle.Top,
                 BackColor = Color.White,
-                Padding = new Padding(12, 10, 12, 10)
+                Padding = new Padding(15, 12, 15, 12)
             };
 
-            CreateFilterControls();
+            // Add subtle bottom border
+            buttonPanel.Paint += (s, e) =>
+            {
+                using (var pen = new Pen(BorderColor, 1))
+                {
+                    e.Graphics.DrawLine(pen, 0, buttonPanel.Height - 1, buttonPanel.Width, buttonPanel.Height - 1);
+                }
+            };
+
             CreateActionButtons();
-        }
-
-        private void CreateFilterControls()
-        {
-            lblFilter = new Label
-            {
-                Text = "Status:",
-                Location = new Point(0, 5),
-                Size = new Size(55, 23),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Font = new Font("Segoe UI", 9F)
-            };
-
-            cboStatusFilter = new ComboBox
-            {
-                Location = new Point(60, 5),
-                Size = new Size(110, 23),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 9F)
-            };
-            cboStatusFilter.Items.AddRange(new object[] { "All", "Pending", "Uploaded", "Failed" });
-            cboStatusFilter.SelectedIndex = 0;
-            cboStatusFilter.SelectedIndexChanged += (s, e) => _ = ApplyFiltersAsync();
-
-            lblSearch = new Label
-            {
-                Text = "Search:",
-                Location = new Point(185, 5),
-                Size = new Size(55, 23),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Font = new Font("Segoe UI", 9F)
-            };
-
-            txtSearchInvoice = new TextBox
-            {
-                Location = new Point(245, 5),
-                Size = new Size(200, 23),
-                PlaceholderText = "Invoice # or Customer Name",
-                Font = new Font("Segoe UI", 9F)
-            };
-            txtSearchInvoice.TextChanged += OnSearchTextChanged;
-
-            buttonPanel.Controls.AddRange(new Control[] { lblFilter, cboStatusFilter, lblSearch, txtSearchInvoice });
         }
 
         private void CreateActionButtons()
         {
-            int btnY = 40;
-            int btnSpacing = 8;
-            int currentX = 0;
+            int btnY = 10;
+            int btnSpacing = 10;
+            int currentX = 15;
 
-            btnFetchInvoices = CreateButton("Fetch Invoices", ref currentX, btnY, 120, Color.FromArgb(0, 122, 204), btnSpacing);
+            btnFetchInvoices = CreateStyledButton("📥 Fetch Invoices", ref currentX, btnY, 140, SecondaryColor, btnSpacing);
             btnFetchInvoices.Click += async (s, e) => await BtnFetchInvoices_ClickAsync();
 
-            btnRefresh = CreateButton("Refresh", ref currentX, btnY, 90, Color.FromArgb(46, 125, 50), btnSpacing);
+            btnRefresh = CreateStyledButton("🔄 Refresh", ref currentX, btnY, 100, Color.FromArgb(108, 117, 125), btnSpacing);
             btnRefresh.Click += (s, e) => _ = LoadInvoicesAsync();
 
-            btnUploadSelected = CreateButton("Upload Selected", ref currentX, btnY, 130, Color.FromArgb(255, 152, 0), btnSpacing);
+            btnUploadSelected = CreateStyledButton("📤 Upload Selected", ref currentX, btnY, 150, SuccessColor, btnSpacing);
             btnUploadSelected.Click += async (s, e) => await BtnUploadSelected_ClickAsync();
 
-            btnGeneratePDF = CreateButton("Generate PDF", ref currentX, btnY, 120, Color.FromArgb(156, 39, 176), btnSpacing);
+            btnGeneratePDF = CreateStyledButton("📄 Generate PDF", ref currentX, btnY, 130, Color.FromArgb(155, 89, 182), btnSpacing);
             btnGeneratePDF.Click += BtnGeneratePDF_Click;
 
-            btnCompanySetup = CreateButton("Company Setup", ref currentX, btnY, 130, Color.FromArgb(96, 125, 139), 0);
-            btnCompanySetup.Click += (s, e) => ShowCompanySetup();
+            // Hidden - moved to header
+            btnCompanySetup = new Button { Visible = false };
         }
 
-        private Button CreateButton(string text, ref int x, int y, int width, Color backColor, int spacing)
+        private Button CreateStyledButton(string text, ref int x, int y, int width, Color backColor, int spacing)
         {
             var button = new Button
             {
                 Text = text,
                 Location = new Point(x, y),
-                Size = new Size(width, 35),
+                Size = new Size(width, 38),
                 BackColor = backColor,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Regular),
                 Cursor = Cursors.Hand,
-                FlatAppearance = { BorderSize = 0 }
+                TextAlign = ContentAlignment.MiddleCenter
             };
+
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = ControlPaint.Dark(backColor, 0.1f);
+            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
+
+            // Rounded corners effect via region (optional - works on some systems)
+            button.Region = CreateRoundedRegion(button.Width, button.Height, 4);
 
             buttonPanel.Controls.Add(button);
             x += width + spacing;
             return button;
+        }
+
+        private System.Drawing.Region CreateRoundedRegion(int width, int height, int radius)
+        {
+            using (var path = new System.Drawing.Drawing2D.GraphicsPath())
+            {
+                path.AddArc(0, 0, radius * 2, radius * 2, 180, 90);
+                path.AddArc(width - radius * 2, 0, radius * 2, radius * 2, 270, 90);
+                path.AddArc(width - radius * 2, height - radius * 2, radius * 2, radius * 2, 0, 90);
+                path.AddArc(0, height - radius * 2, radius * 2, radius * 2, 90, 90);
+                path.CloseFigure();
+                return new System.Drawing.Region(path);
+            }
+        }
+
+        private void CreateFilterPanel()
+        {
+            filterPanel = new Panel
+            {
+                Height = 50,
+                Dock = DockStyle.Top,
+                BackColor = LightBgColor,
+                Padding = new Padding(15, 10, 15, 10)
+            };
+
+            // Filter Label
+            lblFilter = new Label
+            {
+                Text = "Status:",
+                Location = new Point(15, 14),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
+            };
+
+            // Status Filter Dropdown
+            cboStatusFilter = new ComboBox
+            {
+                Location = new Point(65, 11),
+                Size = new Size(120, 28),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 9F),
+                BackColor = Color.White
+            };
+            cboStatusFilter.Items.AddRange(new object[] { "All", "Pending", "Uploaded", "Failed" });
+            cboStatusFilter.SelectedIndex = 0;
+            cboStatusFilter.SelectedIndexChanged += (s, e) => _ = ApplyFiltersAsync();
+
+            // Search Label
+            lblSearch = new Label
+            {
+                Text = "Search:",
+                Location = new Point(210, 14),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
+            };
+
+            // Search TextBox with placeholder
+            txtSearchInvoice = new TextBox
+            {
+                Location = new Point(265, 11),
+                Size = new Size(280, 28),
+                Font = new Font("Segoe UI", 9.5F),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            txtSearchInvoice.TextChanged += OnSearchTextChanged;
+
+            // Add placeholder behavior
+            txtSearchInvoice.Text = "Invoice # or Customer Name...";
+            txtSearchInvoice.ForeColor = Color.Gray;
+            txtSearchInvoice.GotFocus += (s, e) =>
+            {
+                if (txtSearchInvoice.Text == "Invoice # or Customer Name...")
+                {
+                    txtSearchInvoice.Text = "";
+                    txtSearchInvoice.ForeColor = Color.Black;
+                }
+            };
+            txtSearchInvoice.LostFocus += (s, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(txtSearchInvoice.Text))
+                {
+                    txtSearchInvoice.Text = "Invoice # or Customer Name...";
+                    txtSearchInvoice.ForeColor = Color.Gray;
+                }
+            };
+
+            // Record count label (right side)
+            var lblRecordCount = new Label
+            {
+                Name = "lblRecordCount",
+                Text = "",
+                AutoSize = true,
+                Location = new Point(filterPanel.Width - 200, 14),
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+
+            filterPanel.Controls.AddRange(new Control[] { lblFilter, cboStatusFilter, lblSearch, txtSearchInvoice, lblRecordCount });
         }
 
         private void CreateDataGridView()
@@ -263,53 +385,138 @@ namespace C2B_FBR_Connect.Forms
                 BorderStyle = BorderStyle.None,
                 RowHeadersVisible = false,
                 AllowUserToResizeRows = false,
-                RowTemplate = { Height = 28 },
+                RowTemplate = { Height = 32 },
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
-                ColumnHeadersHeight = 32,
-                AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle { BackColor = Color.FromArgb(250, 250, 250) },
+                ColumnHeadersHeight = 38,
                 Font = new Font("Segoe UI", 9F),
-                GridColor = Color.FromArgb(230, 230, 230),
-                EnableHeadersVisualStyles = false
+                GridColor = BorderColor,
+                EnableHeadersVisualStyles = false,
+                CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
+                Margin = new Padding(15, 5, 15, 5)
             };
 
+            // Header style
             dgvInvoices.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
-                BackColor = Color.FromArgb(52, 73, 94),
-                ForeColor = Color.White,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
-                Padding = new Padding(8, 6, 8, 6),
-                Alignment = DataGridViewContentAlignment.MiddleLeft
+                BackColor = Color.FromArgb(248, 249, 250),
+                ForeColor = Color.FromArgb(33, 37, 41),
+                Font = new Font("Segoe UI Semibold", 9F),
+                Padding = new Padding(10, 8, 10, 8),
+                Alignment = DataGridViewContentAlignment.MiddleLeft,
+                SelectionBackColor = Color.FromArgb(248, 249, 250),
+                SelectionForeColor = Color.FromArgb(33, 37, 41)
+            };
+
+            // Default cell style
+            dgvInvoices.DefaultCellStyle = new DataGridViewCellStyle
+            {
+                Padding = new Padding(8, 4, 8, 4),
+                SelectionBackColor = Color.FromArgb(232, 240, 254),
+                SelectionForeColor = Color.Black
+            };
+
+            // Alternating row style
+            dgvInvoices.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle
+            {
+                BackColor = Color.FromArgb(252, 252, 253),
+                SelectionBackColor = Color.FromArgb(232, 240, 254),
+                SelectionForeColor = Color.Black
             };
 
             dgvInvoices.CellContentClick += DgvInvoices_CellContentClick;
             dgvInvoices.CellDoubleClick += DgvInvoices_CellDoubleClick;
             dgvInvoices.ColumnHeaderMouseClick += DgvInvoices_ColumnHeaderMouseClick;
             dgvInvoices.CurrentCellDirtyStateChanged += DgvInvoices_CurrentCellDirtyStateChanged;
+            dgvInvoices.CellFormatting += DgvInvoices_CellFormatting;
             dgvInvoices.DoubleBuffered(true);
+        }
+
+        private void DgvInvoices_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
+        {
+            if (dgvInvoices.Columns[e.ColumnIndex].Name == "Status" && e.Value != null)
+            {
+                var status = e.Value.ToString();
+                var cell = dgvInvoices.Rows[e.RowIndex].Cells[e.ColumnIndex];
+
+                switch (status)
+                {
+                    case "Uploaded":
+                        cell.Style.ForeColor = SuccessColor;
+                        cell.Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                        e.Value = "✓ Uploaded";
+                        break;
+                    case "Failed":
+                        cell.Style.ForeColor = DangerColor;
+                        cell.Style.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+                        e.Value = "✗ Failed";
+                        break;
+                    case "Pending":
+                        cell.Style.ForeColor = Color.FromArgb(108, 117, 125);
+                        e.Value = "○ Pending";
+                        break;
+                }
+            }
+
+            // Format Type column
+            if (dgvInvoices.Columns[e.ColumnIndex].Name == "InvoiceType" && e.Value != null)
+            {
+                var type = e.Value.ToString();
+                var cell = dgvInvoices.Rows[e.RowIndex].Cells[e.ColumnIndex];
+
+                if (type == "Credit Memo")
+                {
+                    cell.Style.ForeColor = DangerColor;
+                    cell.Style.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+                    e.Value = "CR";
+                }
+                else
+                {
+                    cell.Style.ForeColor = SecondaryColor;
+                    cell.Style.Font = new Font("Segoe UI", 8.5F, FontStyle.Bold);
+                    e.Value = "INV";
+                }
+            }
         }
 
         private void CreateStatusStrip()
         {
-            statusStrip = new StatusStrip { BackColor = Color.FromArgb(240, 240, 240) };
+            statusStrip = new StatusStrip
+            {
+                BackColor = Color.White,
+                SizingGrip = false,
+                Padding = new Padding(10, 0, 10, 0)
+            };
+
+            // Add top border
+            statusStrip.Paint += (s, e) =>
+            {
+                using (var pen = new Pen(BorderColor, 1))
+                {
+                    e.Graphics.DrawLine(pen, 0, 0, statusStrip.Width, 0);
+                }
+            };
 
             statusLabel = new ToolStripStatusLabel("Ready")
             {
                 Spring = true,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Font = new Font("Segoe UI", 9F)
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
             };
 
             statusStats = new ToolStripStatusLabel("Total: 0 | Pending: 0 | Uploaded: 0 | Failed: 0")
             {
                 BorderSides = ToolStripStatusLabelBorderSides.Left,
-                Padding = new Padding(10, 0, 10, 0),
-                Font = new Font("Segoe UI", 9F)
+                Padding = new Padding(15, 0, 10, 0),
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
             };
 
             progressBar = new ToolStripProgressBar
             {
                 Visible = false,
-                Size = new Size(150, 16)
+                Size = new Size(180, 18),
+                Style = ProgressBarStyle.Marquee
             };
 
             statusStrip.Items.AddRange(new ToolStripItem[] { statusLabel, progressBar, statusStats });
@@ -329,7 +536,7 @@ namespace C2B_FBR_Connect.Forms
                         "Connection Failed") && ConnectToQuickBooks();
                 }
 
-                lblCompanyName.Text = $"{_qb.CurrentCompanyName}";
+                lblCompanyName.Text = _qb.CurrentCompanyName;
                 _currentCompany = _companyManager.GetCompany(_qb.CurrentCompanyName);
 
                 if (_currentCompany == null)
@@ -343,8 +550,8 @@ namespace C2B_FBR_Connect.Forms
                     _qb.SetSroDataService(_sroDataService);
                     _invoiceManager.SetCompany(_currentCompany);
 
-                    // ✅ Load company logo
                     LoadCompanyLogo();
+                    UpdateEnvironmentBadge();
 
                     _ = LoadTransactionTypesAsync();
                     _ = LoadInvoicesAsync();
@@ -359,12 +566,10 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-        // ✅ New method to load company logo
         private void LoadCompanyLogo()
         {
             try
             {
-                // Dispose previous image if exists
                 if (picCompanyLogo.Image != null)
                 {
                     picCompanyLogo.Image.Dispose();
@@ -375,25 +580,37 @@ namespace C2B_FBR_Connect.Forms
                 {
                     picCompanyLogo.Image = ImageHelper.ByteArrayToImage(_currentCompany.LogoImage);
                     picCompanyLogo.Visible = true;
-
-                    // Adjust company name label position
-                    lblCompanyName.Location = new Point(175, 10);
-                    lblCompanyName.Width = topPanel.Width - 200;
+                    lblCompanyName.Location = new Point(170, 8);
+                    lblEnvironment.Location = new Point(170, 42);
                 }
                 else
                 {
-                    // No logo - hide picture box and expand label
                     picCompanyLogo.Visible = false;
-                    lblCompanyName.Location = new Point(12, 10);
-                    lblCompanyName.Width = topPanel.Width - 24;
+                    lblCompanyName.Location = new Point(15, 8);
+                    lblEnvironment.Location = new Point(15, 42);
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading company logo: {ex.Message}");
                 picCompanyLogo.Visible = false;
-                lblCompanyName.Location = new Point(12, 10);
-                lblCompanyName.Width = topPanel.Width - 24;
+                lblCompanyName.Location = new Point(15, 8);
+                lblEnvironment.Location = new Point(15, 42);
+            }
+        }
+
+        private void UpdateEnvironmentBadge()
+        {
+            if (_currentCompany != null)
+            {
+                var env = _currentCompany.Environment ?? "Sandbox";
+                lblEnvironment.Text = env.ToUpper();
+                lblEnvironment.BackColor = env == "Production" ? SuccessColor : WarningColor;
+                lblEnvironment.Visible = true;
+            }
+            else
+            {
+                lblEnvironment.Visible = false;
             }
         }
 
@@ -423,8 +640,8 @@ namespace C2B_FBR_Connect.Forms
             try
             {
                 statusLabel.Text = "Loading invoices...";
+                progressBar.Visible = true;
 
-                // Load data asynchronously
                 _allInvoices = await Task.Run(() => _db.GetInvoices(_currentCompany.CompanyName));
 
                 await ApplyFiltersAsync();
@@ -437,10 +654,18 @@ namespace C2B_FBR_Connect.Forms
                 ShowError("Error loading invoices", ex.Message);
                 statusLabel.Text = "Error loading invoices";
             }
+            finally
+            {
+                progressBar.Visible = false;
+            }
         }
 
         private void OnSearchTextChanged(object sender, EventArgs e)
         {
+            // Ignore placeholder text
+            if (txtSearchInvoice.Text == "Invoice # or Customer Name...")
+                return;
+
             _searchDebounceTimer.Stop();
             _searchDebounceTimer.Start();
         }
@@ -449,7 +674,6 @@ namespace C2B_FBR_Connect.Forms
         {
             if (_allInvoices == null) return;
 
-            // Cancel any ongoing filter operation
             _filterCancellationTokenSource?.Cancel();
             _filterCancellationTokenSource = new CancellationTokenSource();
             var token = _filterCancellationTokenSource.Token;
@@ -459,7 +683,10 @@ namespace C2B_FBR_Connect.Forms
                 var statusFilter = cboStatusFilter.SelectedItem?.ToString();
                 var searchText = txtSearchInvoice.Text.Trim();
 
-                // Perform filtering on background thread
+                // Ignore placeholder
+                if (searchText == "Invoice # or Customer Name...")
+                    searchText = "";
+
                 var filtered = await Task.Run(() =>
                 {
                     var result = _allInvoices.AsEnumerable();
@@ -483,11 +710,17 @@ namespace C2B_FBR_Connect.Forms
 
                 UpdateDataGridView(filtered);
 
+                // Update record count
+                var lblRecordCount = filterPanel.Controls.Find("lblRecordCount", false).FirstOrDefault() as Label;
+                if (lblRecordCount != null)
+                {
+                    lblRecordCount.Text = $"Showing {filtered.Count} of {_allInvoices.Count} records";
+                }
+
                 statusLabel.Text = $"Showing {filtered.Count} of {_allInvoices.Count} invoices";
             }
             catch (OperationCanceledException)
             {
-                // Filter was cancelled, ignore
             }
         }
 
@@ -498,6 +731,7 @@ namespace C2B_FBR_Connect.Forms
             try
             {
                 dgvInvoices.DataSource = null;
+                dgvInvoices.Columns.Clear();
                 dgvInvoices.DataSource = invoices;
 
                 FormatDataGridView(invoices);
@@ -522,9 +756,9 @@ namespace C2B_FBR_Connect.Forms
                     stats[status] = 1;
             }
 
-            statusStats.Text = $"Total: {_allInvoices.Count} | " +
-                              $"Pending: {stats.GetValueOrDefault("Pending", 0)} | " +
-                              $"Uploaded: {stats.GetValueOrDefault("Uploaded", 0)} | " +
+            statusStats.Text = $"Total: {_allInvoices.Count}  |  " +
+                              $"Pending: {stats.GetValueOrDefault("Pending", 0)}  |  " +
+                              $"Uploaded: {stats.GetValueOrDefault("Uploaded", 0)}  |  " +
                               $"Failed: {stats.GetValueOrDefault("Failed", 0)}";
         }
 
@@ -536,14 +770,67 @@ namespace C2B_FBR_Connect.Forms
         {
             if (invoices == null) return;
 
-            // Add checkbox column only once
-            if (!dgvInvoices.Columns.Contains("Select"))
+            // First hide all columns
+            foreach (DataGridViewColumn col in dgvInvoices.Columns)
             {
-                AddCheckboxColumn();
+                col.Visible = false;
             }
 
-            HideUnnecessaryColumns();
-            ConfigureVisibleColumns();
+            // Add checkbox column first
+            AddCheckboxColumn();
+
+            // Define column order and configuration
+            var columnConfig = new List<(string Name, string Header, int FillWeight, bool Visible, DataGridViewContentAlignment? Align, string Format)>
+            {
+                ("Select", "☐", 4, true, DataGridViewContentAlignment.MiddleCenter, null),
+                ("InvoiceType", "Type", 5, true, DataGridViewContentAlignment.MiddleCenter, null),
+                ("InvoiceNumber", "Invoice #", 10, true, null, null),
+                ("CustomerName", "Customer Name", 18, true, null, null),
+                ("CustomerNTN", "NTN / CNIC", 12, true, null, null),
+                ("Amount", "Amount", 9, true, DataGridViewContentAlignment.MiddleRight, "N2"),
+                ("Status", "Status", 9, true, DataGridViewContentAlignment.MiddleCenter, null),
+                ("FBR_IRN", "FBR IRN", 14, true, null, null),
+                ("UploadDate", "Upload Date", 11, true, DataGridViewContentAlignment.MiddleCenter, "dd-MMM-yyyy HH:mm"),
+                ("ErrorMessage", "Error Message", 15, true, null, null)
+            };
+
+            int displayIndex = 0;
+            foreach (var config in columnConfig)
+            {
+                var column = dgvInvoices.Columns[config.Name];
+                if (column != null)
+                {
+                    column.Visible = config.Visible;
+                    column.HeaderText = config.Header;
+                    column.FillWeight = config.FillWeight;
+                    column.DisplayIndex = displayIndex++;
+                    column.ReadOnly = config.Name != "Select";
+                    column.SortMode = config.Name == "Select" ? DataGridViewColumnSortMode.NotSortable : DataGridViewColumnSortMode.Automatic;
+
+                    if (!string.IsNullOrEmpty(config.Format))
+                        column.DefaultCellStyle.Format = config.Format;
+
+                    if (config.Align.HasValue)
+                        column.DefaultCellStyle.Alignment = config.Align.Value;
+
+                    // Special styling for specific columns
+                    if (config.Name == "InvoiceNumber")
+                    {
+                        column.DefaultCellStyle.Font = new Font("Segoe UI Semibold", 9F);
+                        column.DefaultCellStyle.ForeColor = SecondaryColor;
+                    }
+
+                    if (config.Name == "Amount")
+                    {
+                        column.DefaultCellStyle.Font = new Font("Segoe UI Semibold", 9F);
+                    }
+
+                    if (config.Name == "ErrorMessage")
+                    {
+                        column.DefaultCellStyle.ForeColor = DangerColor;
+                    }
+                }
+            }
 
             if (invoices.Count > 0)
             {
@@ -553,66 +840,20 @@ namespace C2B_FBR_Connect.Forms
 
         private void AddCheckboxColumn()
         {
+            if (dgvInvoices.Columns.Contains("Select")) return;
+
             var checkboxColumn = new DataGridViewCheckBoxColumn
             {
                 Name = "Select",
                 HeaderText = "☐",
-                Width = 40,
-                FillWeight = 5,
+                Width = 45,
+                FillWeight = 4,
                 ReadOnly = false,
-                DisplayIndex = 0
+                DisplayIndex = 0,
+                Resizable = DataGridViewTriState.False
             };
 
             dgvInvoices.Columns.Insert(0, checkboxColumn);
-        }
-
-        private void HideUnnecessaryColumns()
-        {
-            var columnsToHide = new[] {
-                "Id", "QuickBooksInvoiceId", "CompanyName", "FBR_QRCode", "CreatedDate", "ModifiedDate",
-                "CustomerAddress", "CustomerPhone", "CustomerEmail", "TotalAmount", "TaxAmount",
-                "DiscountAmount", "InvoiceDate", "PaymentMode", "Items", "CustomerType"
-            };
-
-            foreach (var col in columnsToHide)
-            {
-                if (dgvInvoices.Columns[col] != null)
-                    dgvInvoices.Columns[col].Visible = false;
-            }
-        }
-
-
-        private void ConfigureVisibleColumns()
-        {
-            var columnConfig = new Dictionary<string, (string Header, int Weight, string Format, DataGridViewContentAlignment? Alignment)>
-            {
-                ["InvoiceType"] = ("Type", 10, null, DataGridViewContentAlignment.MiddleCenter), // Add this
-                ["InvoiceNumber"] = ("Invoice #", 12, null, null),
-                ["CustomerName"] = ("Customer", 22, null, null),
-                ["CustomerNTN"] = ("NTN/CNIC", 15, null, null),
-                ["Amount"] = ("Amount", 10, "N2", DataGridViewContentAlignment.MiddleRight),
-                ["Status"] = ("Status", 8, null, DataGridViewContentAlignment.MiddleCenter),
-                ["FBR_IRN"] = ("FBR IRN", 18, null, null),
-                ["UploadDate"] = ("Upload Date", 15, "dd-MMM-yyyy HH:mm", null),
-                ["ErrorMessage"] = ("Error", 20, null, null) // Reduced from 25 to make room
-            };
-
-            foreach (var config in columnConfig)
-            {
-                var column = dgvInvoices.Columns[config.Key];
-                if (column != null)
-                {
-                    column.HeaderText = config.Value.Header;
-                    column.FillWeight = config.Value.Weight;
-                    column.ReadOnly = true;
-
-                    if (!string.IsNullOrEmpty(config.Value.Format))
-                        column.DefaultCellStyle.Format = config.Value.Format;
-
-                    if (config.Value.Alignment.HasValue)
-                        column.DefaultCellStyle.Alignment = config.Value.Alignment.Value;
-                }
-            }
         }
 
         private void RestoreCheckboxStates()
@@ -639,6 +880,7 @@ namespace C2B_FBR_Connect.Forms
 
             var sorted = columnName switch
             {
+                "InvoiceType" => dataSource.OrderBy(i => i.InvoiceType).ToList(),
                 "InvoiceNumber" => dataSource.OrderBy(i => i.InvoiceNumber).ToList(),
                 "CustomerName" => dataSource.OrderBy(i => i.CustomerName).ToList(),
                 "CustomerNTN" => dataSource.OrderBy(i => i.CustomerNTN).ToList(),
@@ -659,7 +901,7 @@ namespace C2B_FBR_Connect.Forms
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
-            if (!ShowConfirmDialog("Are you sure you want to exit the application?\n\nQuickBooks connection will be closed.",
+            if (!ShowConfirmDialog("Are you sure you want to exit?\n\nQuickBooks connection will be closed.",
                 "Confirm Exit"))
             {
                 e.Cancel = true;
@@ -746,7 +988,6 @@ namespace C2B_FBR_Connect.Forms
 
                     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
-                    // ✅ Use updated InvoiceManager method with date range
                     var transactions = await _invoiceManager.FetchFromQuickBooks(
                         dateFrom,
                         dateTo,
@@ -790,12 +1031,10 @@ namespace C2B_FBR_Connect.Forms
 
         private void BtnGeneratePDF_Click(object sender, EventArgs e)
         {
-            // ✅ First check for checked invoices, then fall back to row selection
             var checkedInvoices = GetCheckedInvoices().Where(i => i.Status == "Uploaded").ToList();
 
             if (checkedInvoices.Count == 0)
             {
-                // Fall back to selected row if no checkboxes are checked
                 if (dgvInvoices.SelectedRows.Count > 0)
                 {
                     var selectedInvoice = dgvInvoices.SelectedRows[0].DataBoundItem as Invoice;
@@ -808,7 +1047,6 @@ namespace C2B_FBR_Connect.Forms
 
             if (checkedInvoices.Count == 0)
             {
-                // Check if there are checked invoices that aren't uploaded
                 var pendingChecked = GetCheckedInvoices().Where(i => i.Status != "Uploaded").ToList();
                 if (pendingChecked.Count > 0)
                 {
@@ -823,12 +1061,10 @@ namespace C2B_FBR_Connect.Forms
 
             if (checkedInvoices.Count == 1)
             {
-                // Single PDF - use save dialog
                 GeneratePDF(checkedInvoices[0]);
             }
             else
             {
-                // Multiple PDFs - use folder browser
                 GenerateMultiplePDFs(checkedInvoices);
             }
         }
@@ -847,19 +1083,16 @@ namespace C2B_FBR_Connect.Forms
 
             try
             {
-                // Filter out already uploaded invoices
                 var invoicesToUpload = invoices.Where(i => i.Status != "Uploaded").ToList();
                 var alreadyUploadedCount = invoices.Count - invoicesToUpload.Count;
 
                 if (invoicesToUpload.Count == 0)
                 {
                     ShowInfo("All selected invoices are already uploaded.", "Nothing to Upload");
-                    // ✅ Clear selections for already uploaded invoices
                     ClearSelectionsForInvoices(invoices);
                     return;
                 }
 
-                // ✅ Show confirmation if some are already uploaded
                 if (alreadyUploadedCount > 0)
                 {
                     var msg = $"{alreadyUploadedCount} invoice(s) already uploaded and will be skipped.\n" +
@@ -908,13 +1141,11 @@ namespace C2B_FBR_Connect.Forms
                     progressBar.Value++;
                 }
 
-                // ✅ Clear checkboxes for successfully uploaded invoices
                 foreach (var id in successfullyUploadedIds)
                 {
                     _selectedInvoiceIds.Remove(id);
                 }
 
-                // ✅ Also clear checkboxes for already uploaded invoices that were selected
                 foreach (var invoice in invoices.Where(i => i.Status == "Uploaded"))
                 {
                     _selectedInvoiceIds.Remove(invoice.Id);
@@ -935,7 +1166,6 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-        // ✅ Helper method to clear selections
         private void ClearSelectionsForInvoices(List<Invoice> invoices)
         {
             foreach (var invoice in invoices)
@@ -946,7 +1176,6 @@ namespace C2B_FBR_Connect.Forms
             UpdateSelectedCount();
         }
 
-        // ✅ Refresh checkbox visual states
         private void RefreshCheckboxStates()
         {
             if (!dgvInvoices.Columns.Contains("Select")) return;
@@ -961,12 +1190,11 @@ namespace C2B_FBR_Connect.Forms
             dgvInvoices.Refresh();
         }
 
-        // ✅ Update button text with selected count
         private void UpdateSelectedCount()
         {
             var count = _selectedInvoiceIds.Count;
-            btnUploadSelected.Text = count > 0 ? $"Upload Selected ({count})" : "Upload Selected";
-            btnGeneratePDF.Text = count > 0 ? $"Generate PDF ({count})" : "Generate PDF";
+            btnUploadSelected.Text = count > 0 ? $"📤 Upload ({count})" : "📤 Upload Selected";
+            btnGeneratePDF.Text = count > 0 ? $"📄 PDF ({count})" : "📄 Generate PDF";
         }
 
         private async Task ShowInvoiceDetailsAsync(Invoice invoice)
@@ -981,7 +1209,6 @@ namespace C2B_FBR_Connect.Forms
                 progressBar.Visible = true;
                 progressBar.Style = ProgressBarStyle.Marquee;
 
-                // ✅ Use InvoiceManager's method instead of calling QB directly
                 var details = await _invoiceManager.GetFullInvoicePayload(invoice);
 
                 if (details == null)
@@ -992,10 +1219,8 @@ namespace C2B_FBR_Connect.Forms
 
                 var fbrPayload = _fbr.BuildFBRPayload(details);
 
-                // ✅ GET ENVIRONMENT FROM CURRENT COMPANY
                 string environment = _currentCompany?.Environment ?? "Sandbox";
 
-                // ✅ PASS ENVIRONMENT TO ConvertToApiPayload
                 var apiPayload = _fbr.ConvertToApiPayload(fbrPayload, environment);
 
                 string json = Newtonsoft.Json.JsonConvert.SerializeObject(apiPayload, Newtonsoft.Json.Formatting.Indented);
@@ -1042,7 +1267,6 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-        // ✅ New method for generating multiple PDFs
         private void GenerateMultiplePDFs(List<Invoice> invoices)
         {
             using var folderDialog = new FolderBrowserDialog
@@ -1151,7 +1375,7 @@ namespace C2B_FBR_Connect.Forms
                 ShowWarning($"Could not fetch company info from QuickBooks: {ex.Message}", "Warning");
             }
 
-            using var setupForm = new CompanySetupForm(_qb.CurrentCompanyName, _currentCompany);
+            using var setupForm = new CompanySetupForm(_qb.CurrentCompanyName, _currentCompany, _qb);
             if (setupForm.ShowDialog() == DialogResult.OK)
             {
                 try
@@ -1160,8 +1384,8 @@ namespace C2B_FBR_Connect.Forms
                     _companyManager.SaveCompany(_currentCompany);
                     _invoiceManager.SetCompany(_currentCompany);
 
-                    // ✅ Reload company logo after setup
                     LoadCompanyLogo();
+                    UpdateEnvironmentBadge();
 
                     _ = LoadInvoicesAsync();
                     _ = LoadTransactionTypesAsync();
@@ -1251,7 +1475,8 @@ namespace C2B_FBR_Connect.Forms
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.Sizable,
                 MinimizeBox = false,
-                MaximizeBox = true
+                MaximizeBox = true,
+                BackColor = Color.White
             };
 
             if (validationErrors.Count > 0)
@@ -1269,7 +1494,8 @@ namespace C2B_FBR_Connect.Forms
                 Font = new Font("Consolas", 10F),
                 BackColor = Color.White,
                 Text = json,
-                WordWrap = false
+                WordWrap = false,
+                BorderStyle = BorderStyle.None
             };
 
             var buttonPanel = CreateInvoiceDetailButtons(json, validationErrors, detailForm);
@@ -1286,30 +1512,30 @@ namespace C2B_FBR_Connect.Forms
                 Dock = DockStyle.Top,
                 Height = Math.Min(150, errors.Count * 25 + 50),
                 BackColor = Color.FromArgb(255, 243, 205),
-                BorderStyle = BorderStyle.FixedSingle
+                BorderStyle = BorderStyle.None
             };
 
             panel.Controls.Add(new Label
             {
                 Text = $"⚠️ VALIDATION WARNINGS ({errors.Count})",
-                Location = new Point(10, 10),
+                Location = new Point(15, 12),
                 Size = new Size(950, 20),
-                Font = new Font("Arial", 10F, FontStyle.Bold),
+                Font = new Font("Segoe UI Semibold", 10F),
                 ForeColor = Color.FromArgb(102, 60, 0)
             });
 
             panel.Controls.Add(new TextBox
             {
                 Text = string.Join(Environment.NewLine, errors),
-                Location = new Point(10, 35),
-                Size = new Size(960, panel.Height - 45),
+                Location = new Point(15, 38),
+                Size = new Size(960, panel.Height - 50),
                 Multiline = true,
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Vertical,
                 BackColor = Color.FromArgb(255, 243, 205),
                 ForeColor = Color.FromArgb(102, 60, 0),
                 BorderStyle = BorderStyle.None,
-                Font = new Font("Arial", 9F)
+                Font = new Font("Segoe UI", 9F)
             });
 
             return panel;
@@ -1320,19 +1546,21 @@ namespace C2B_FBR_Connect.Forms
             var panel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = 50,
-                BackColor = Color.FromArgb(240, 240, 240)
+                Height = 55,
+                BackColor = LightBgColor
             };
 
             var btnCopy = new Button
             {
-                Text = "Copy JSON",
-                Size = new Size(120, 35),
-                Location = new Point(10, 8),
-                BackColor = Color.FromArgb(33, 150, 243),
+                Text = "📋 Copy JSON",
+                Size = new Size(120, 38),
+                Location = new Point(15, 8),
+                BackColor = SecondaryColor,
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F)
             };
+            btnCopy.FlatAppearance.BorderSize = 0;
             btnCopy.Click += (s, e) =>
             {
                 Clipboard.SetText(json);
@@ -1341,13 +1569,15 @@ namespace C2B_FBR_Connect.Forms
 
             var btnValidate = new Button
             {
-                Text = "Validate",
-                Size = new Size(100, 35),
-                Location = new Point(140, 8),
-                BackColor = errors.Count == 0 ? Color.FromArgb(46, 125, 50) : Color.FromArgb(255, 152, 0),
+                Text = errors.Count == 0 ? "✓ Valid" : $"⚠ {errors.Count} Issues",
+                Size = new Size(110, 38),
+                Location = new Point(145, 8),
+                BackColor = errors.Count == 0 ? SuccessColor : WarningColor,
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F)
             };
+            btnValidate.FlatAppearance.BorderSize = 0;
             btnValidate.Click += (s, e) =>
             {
                 if (errors.Count == 0)
@@ -1360,12 +1590,14 @@ namespace C2B_FBR_Connect.Forms
             var btnClose = new Button
             {
                 Text = "Close",
-                Size = new Size(100, 35),
-                Location = new Point(250, 8),
-                BackColor = Color.FromArgb(96, 125, 139),
+                Size = new Size(100, 38),
+                Location = new Point(265, 8),
+                BackColor = Color.FromArgb(108, 117, 125),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F)
             };
+            btnClose.FlatAppearance.BorderSize = 0;
             btnClose.Click += (s, e) => parentForm.Close();
 
             panel.Controls.AddRange(new Control[] { btnCopy, btnValidate, btnClose });
@@ -1387,22 +1619,32 @@ namespace C2B_FBR_Connect.Forms
                 Height = 650,
                 StartPosition = FormStartPosition.CenterParent,
                 FormBorderStyle = FormBorderStyle.Sizable,
-                MinimumSize = new Size(700, 500)
+                MinimumSize = new Size(700, 500),
+                BackColor = Color.White
             };
 
             var lblSummary = new Label
             {
                 Text = $"✅ Uploaded: {uploaded}    ❌ Failed: {failed}",
                 Location = new Point(20, 20),
-                Size = new Size(850, 30),
-                Font = new Font("Arial", 12F, FontStyle.Bold),
-                ForeColor = failed > 0 ? Color.DarkRed : Color.DarkGreen,
+                Size = new Size(850, 35),
+                Font = new Font("Segoe UI Semibold", 13F),
+                ForeColor = failed > 0 ? DangerColor : SuccessColor,
                 Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+
+            var lblDetails = new Label
+            {
+                Text = "Failed Invoice Details:",
+                Location = new Point(20, 60),
+                Size = new Size(200, 20),
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
             };
 
             var txtFailed = new TextBox
             {
-                Text = string.Join(Environment.NewLine + new string('=', 80) + Environment.NewLine,
+                Text = string.Join(Environment.NewLine + new string('─', 80) + Environment.NewLine,
                     failedInvoices.Select(f => $"Invoice: {f.InvoiceNumber}\nError:\n{f.Error}\n")),
                 Location = new Point(20, 85),
                 Size = new Size(840, 450),
@@ -1411,19 +1653,22 @@ namespace C2B_FBR_Connect.Forms
                 ScrollBars = ScrollBars.Vertical,
                 Font = new Font("Consolas", 9F),
                 BackColor = Color.FromArgb(255, 245, 245),
-                ForeColor = Color.DarkRed,
+                ForeColor = DangerColor,
+                BorderStyle = BorderStyle.FixedSingle,
                 Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right
             };
 
             var btnCopy = new Button
             {
-                Text = "Copy Errors",
-                Size = new Size(120, 35),
-                BackColor = Color.FromArgb(33, 150, 243),
+                Text = "📋 Copy Errors",
+                Size = new Size(130, 40),
+                BackColor = SecondaryColor,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Left
             };
+            btnCopy.FlatAppearance.BorderSize = 0;
             btnCopy.Location = new Point(20, resultForm.ClientSize.Height - 55);
             btnCopy.Click += (s, e) =>
             {
@@ -1434,16 +1679,18 @@ namespace C2B_FBR_Connect.Forms
             var btnClose = new Button
             {
                 Text = "Close",
-                Size = new Size(120, 35),
-                BackColor = Color.FromArgb(96, 125, 139),
+                Size = new Size(120, 40),
+                BackColor = Color.FromArgb(108, 117, 125),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
+            btnClose.FlatAppearance.BorderSize = 0;
             btnClose.Location = new Point(resultForm.ClientSize.Width - 140, resultForm.ClientSize.Height - 55);
             btnClose.Click += (s, e) => resultForm.Close();
 
-            resultForm.Controls.AddRange(new Control[] { lblSummary, txtFailed, btnCopy, btnClose });
+            resultForm.Controls.AddRange(new Control[] { lblSummary, lblDetails, txtFailed, btnCopy, btnClose });
             resultForm.ShowDialog();
         }
 
@@ -1460,7 +1707,8 @@ namespace C2B_FBR_Connect.Forms
             {
                 Text = "Error Details",
                 Size = new Size(800, 600),
-                StartPosition = FormStartPosition.CenterParent
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.White
             };
 
             var txtError = new TextBox
@@ -1472,18 +1720,21 @@ namespace C2B_FBR_Connect.Forms
                 Dock = DockStyle.Fill,
                 Font = new Font("Consolas", 9F),
                 BackColor = Color.FromArgb(255, 235, 238),
-                ForeColor = Color.DarkRed
+                ForeColor = DangerColor,
+                BorderStyle = BorderStyle.None
             };
 
             var btnClose = new Button
             {
                 Text = "Close",
                 Dock = DockStyle.Bottom,
-                Height = 40,
-                BackColor = Color.FromArgb(211, 47, 47),
+                Height = 45,
+                BackColor = DangerColor,
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 10F)
             };
+            btnClose.FlatAppearance.BorderSize = 0;
             btnClose.Click += (s, e) => errorForm.Close();
 
             errorForm.Controls.AddRange(new Control[] { txtError, btnClose });
@@ -1539,7 +1790,6 @@ namespace C2B_FBR_Connect.Forms
             _filterCancellationTokenSource?.Cancel();
             _filterCancellationTokenSource?.Dispose();
 
-            // ✅ Dispose logo image
             if (picCompanyLogo?.Image != null)
             {
                 picCompanyLogo.Image.Dispose();

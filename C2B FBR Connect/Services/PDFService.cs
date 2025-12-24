@@ -23,15 +23,16 @@ namespace C2B_FBR_Connect.Services
 {
     public class PDFService
     {
-        // Simplified color scheme
+        // Clean color scheme
         private static readonly DeviceRgb PRIMARY_COLOR = new DeviceRgb(41, 128, 185);
-        private static readonly DeviceRgb TABLE_HEADER = new DeviceRgb(52, 152, 219);
-        private static readonly DeviceRgb TABLE_ALT_ROW = new DeviceRgb(250, 250, 250);
-        private static readonly DeviceRgb BORDER_COLOR = new DeviceRgb(189, 195, 199);
-        private static readonly DeviceRgb TEXT_PRIMARY = new DeviceRgb(44, 62, 80);
-        private static readonly DeviceRgb TEXT_SECONDARY = new DeviceRgb(127, 140, 141);
-        private static readonly DeviceRgb ACCENT_GREEN = new DeviceRgb(39, 174, 96);
-        private static readonly DeviceRgb LIGHT_BG = new DeviceRgb(236, 240, 241);
+        private static readonly DeviceRgb TABLE_HEADER = new DeviceRgb(52, 73, 94);
+        private static readonly DeviceRgb TABLE_ALT_ROW = new DeviceRgb(249, 250, 251);
+        private static readonly DeviceRgb BORDER_COLOR = new DeviceRgb(206, 212, 218);
+        private static readonly DeviceRgb TEXT_PRIMARY = new DeviceRgb(33, 37, 41);
+        private static readonly DeviceRgb TEXT_SECONDARY = new DeviceRgb(108, 117, 125);
+        private static readonly DeviceRgb ACCENT_GREEN = new DeviceRgb(40, 167, 69);
+        private static readonly DeviceRgb LIGHT_BG = new DeviceRgb(248, 249, 250);
+        private static readonly DeviceRgb HIGHLIGHT_BG = new DeviceRgb(255, 243, 205);
 
         public void GenerateInvoicePDF(Invoice invoice, Company company, string outputPath)
         {
@@ -48,16 +49,12 @@ namespace C2B_FBR_Connect.Services
                 pdfDoc = new PdfDocument(writer);
                 pdfDoc.SetDefaultPageSize(PageSize.A4);
 
-                // Minimal margins for maximum space
+                // Minimal margins for maximum content space
                 document = new Document(pdfDoc);
-                document.SetMargins(15, 15, 100, 15);  // Bottom margin for FBR section
+                document.SetMargins(12, 12, 95, 12);  // Top, Right, Bottom (for FBR), Left
 
-                // Create fonts
                 var boldFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD);
                 var normalFont = PdfFontFactory.CreateFont(StandardFonts.HELVETICA);
-
-                // Add watermark if needed (you can add Status property to Invoice model)
-                // AddWatermark(pdfDoc, "DRAFT"); // Uncomment if you want watermark
 
                 BuildPDFContent(document, invoice, company, boldFont, normalFont);
             }
@@ -83,51 +80,28 @@ namespace C2B_FBR_Connect.Services
                 Directory.CreateDirectory(dir);
         }
 
-        private void AddWatermark(PdfDocument pdfDoc, string text)
-        {
-            // This will be applied to all pages
-            for (int i = 1; i <= pdfDoc.GetNumberOfPages(); i++)
-            {
-                PdfPage page = pdfDoc.GetPage(i);
-                PdfCanvas canvas = new PdfCanvas(page);
-                canvas.SaveState();
-
-                // Set transparency
-                var gs = new iText.Kernel.Pdf.Extgstate.PdfExtGState();
-                gs.SetFillOpacity(0.3f);
-                canvas.SetExtGState(gs);
-
-                canvas.SetFillColor(new DeviceRgb(200, 200, 200));
-                canvas.BeginText();
-                canvas.SetFontAndSize(PdfFontFactory.CreateFont(StandardFonts.HELVETICA_BOLD), 60);
-                canvas.MoveText(page.GetPageSize().GetWidth() / 2 - 100, page.GetPageSize().GetHeight() / 2);
-                canvas.ShowText(text);
-                canvas.EndText();
-                canvas.RestoreState();
-            }
-        }
-
         private void BuildPDFContent(Document doc, Invoice invoice, Company company,
             PdfFont boldFont, PdfFont normalFont)
         {
-            AddCompactHeader(doc, company, invoice, boldFont, normalFont);
-            AddPartyDetailsCompact(doc, invoice, company, boldFont, normalFont);
-            AddItemsTableCompact(doc, invoice, boldFont, normalFont);
-            AddCompactSummary(doc, invoice, boldFont, normalFont);
-            AddFBRSectionAboveFooter(doc, invoice, boldFont, normalFont);
-            AddCompactFooter(doc, normalFont);
+            AddHeader(doc, company, invoice, boldFont, normalFont);
+            AddPartyDetails(doc, invoice, company, boldFont, normalFont);
+            AddItemsTable(doc, invoice, boldFont, normalFont);
+            AddSummarySection(doc, invoice, boldFont, normalFont);
+            AddFBRSection(doc, invoice, boldFont, normalFont);
+            AddFooter(doc, normalFont);
         }
 
-        #region Compact Header
+        #region Header Section
 
-        private void AddCompactHeader(Document doc, Company company, Invoice invoice,
+        private void AddHeader(Document doc, Company company, Invoice invoice,
             PdfFont boldFont, PdfFont normalFont)
         {
-            Table headerTable = new Table(UnitValue.CreatePercentArray(new float[] { 1f, 2f, 1f }))
+            // Main header table: Logo | Company Info | Invoice Info
+            Table headerTable = new Table(UnitValue.CreatePercentArray(new float[] { 0.8f, 2.2f, 1.2f }))
                 .UseAllAvailableWidth()
-                .SetMarginBottom(8);
+                .SetMarginBottom(6);
 
-            // LEFT: Logo
+            // LEFT: Company Logo
             Cell logoCell = new Cell()
                 .SetBorder(Border.NO_BORDER)
                 .SetVerticalAlignment(VerticalAlignment.MIDDLE)
@@ -140,243 +114,229 @@ namespace C2B_FBR_Connect.Services
                     var logoData = ImageDataFactory.Create(company.LogoImage);
                     var logo = new iText.Layout.Element.Image(logoData);
 
-                    float originalWidth = logo.GetImageWidth();
-                    float originalHeight = logo.GetImageHeight();
-                    float maxWidth = 70f;
-                    float maxHeight = 40f;
-
-                    float widthRatio = maxWidth / originalWidth;
-                    float heightRatio = maxHeight / originalHeight;
+                    float maxWidth = 65f;
+                    float maxHeight = 38f;
+                    float widthRatio = maxWidth / logo.GetImageWidth();
+                    float heightRatio = maxHeight / logo.GetImageHeight();
                     float scaleFactor = Math.Min(widthRatio, heightRatio);
 
-                    logo.SetWidth(originalWidth * scaleFactor);
-                    logo.SetHeight(originalHeight * scaleFactor);
+                    logo.SetWidth(logo.GetImageWidth() * scaleFactor);
+                    logo.SetHeight(logo.GetImageHeight() * scaleFactor);
                     logoCell.Add(logo);
                 }
                 catch
                 {
-                    string initials = "CO";
-                    if (!string.IsNullOrEmpty(company.CompanyName) && company.CompanyName.Length > 0)
-                    {
-                        initials = company.CompanyName.Substring(0, Math.Min(2, company.CompanyName.Length)).ToUpper();
-                    }
-
-                    logoCell.Add(new Paragraph(initials)
-                        .SetFont(boldFont)
-                        .SetFontSize(14)
-                        .SetFontColor(PRIMARY_COLOR));
+                    AddFallbackLogo(logoCell, company, boldFont);
                 }
+            }
+            else
+            {
+                AddFallbackLogo(logoCell, company, boldFont);
             }
 
             headerTable.AddCell(logoCell);
 
-            // CENTER: Company Info
+            // CENTER: Company Information
             Cell companyCell = new Cell()
                 .SetBorder(Border.NO_BORDER)
-                .SetTextAlignment(TextAlignment.CENTER)
-                .SetPadding(0);
+                .SetPaddingLeft(8)
+                .SetVerticalAlignment(VerticalAlignment.MIDDLE);
 
             companyCell.Add(new Paragraph(company.CompanyName ?? "Company Name")
                 .SetFont(boldFont)
-                .SetFontSize(12)
+                .SetFontSize(11)
                 .SetFontColor(PRIMARY_COLOR)
-                .SetMarginBottom(2));
+                .SetMarginBottom(1));
 
             if (!string.IsNullOrEmpty(company.SellerAddress))
             {
                 companyCell.Add(new Paragraph(company.SellerAddress)
                     .SetFont(normalFont)
-                    .SetFontSize(7)
+                    .SetFontSize(6.5f)
                     .SetFontColor(TEXT_SECONDARY)
                     .SetMarginBottom(1));
             }
 
-            var contactLine = "";
-            if (!string.IsNullOrEmpty(company.SellerPhone))
-                contactLine = $"Tel: {company.SellerPhone}";
-            if (!string.IsNullOrEmpty(company.SellerEmail))
-                contactLine += (string.IsNullOrEmpty(contactLine) ? "" : " | ") + company.SellerEmail;
+            // Contact line
+            var contactParts = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrEmpty(company.SellerPhone)) contactParts.Add($"📞 {company.SellerPhone}");
+            if (!string.IsNullOrEmpty(company.SellerEmail)) contactParts.Add($"✉ {company.SellerEmail}");
 
-            if (!string.IsNullOrEmpty(contactLine))
+            if (contactParts.Count > 0)
             {
-                companyCell.Add(new Paragraph(contactLine)
+                companyCell.Add(new Paragraph(string.Join("  |  ", contactParts))
                     .SetFont(normalFont)
-                    .SetFontSize(7)
+                    .SetFontSize(6)
                     .SetFontColor(TEXT_SECONDARY));
             }
 
             headerTable.AddCell(companyCell);
 
-            // RIGHT: NTN Box
+            // RIGHT: NTN & STR Box
             Cell ntnCell = new Cell()
                 .SetBorder(new SolidBorder(PRIMARY_COLOR, 1))
                 .SetBackgroundColor(LIGHT_BG)
                 .SetPadding(5)
-                .SetTextAlignment(TextAlignment.CENTER);
+                .SetVerticalAlignment(VerticalAlignment.MIDDLE);
 
-            ntnCell.Add(new Paragraph("NTN")
-                .SetFont(normalFont)
-                .SetFontSize(7)
-                .SetFontColor(TEXT_SECONDARY)
-                .SetMarginBottom(2));
+            // NTN Row
+            Table ntnTable = new Table(UnitValue.CreatePercentArray(new float[] { 1f, 1.5f }))
+                .UseAllAvailableWidth();
 
-            ntnCell.Add(new Paragraph(company.SellerNTN ?? "N/A")
-                .SetFont(boldFont)
-                .SetFontSize(9)
-                .SetFontColor(PRIMARY_COLOR));
+            ntnTable.AddCell(new Cell().SetBorder(Border.NO_BORDER)
+                .Add(new Paragraph("NTN:").SetFont(normalFont).SetFontSize(7).SetFontColor(TEXT_SECONDARY)));
+            ntnTable.AddCell(new Cell().SetBorder(Border.NO_BORDER)
+                .Add(new Paragraph(company.SellerNTN ?? "N/A").SetFont(boldFont).SetFontSize(8).SetFontColor(PRIMARY_COLOR)));
 
+            // STR Row
+            ntnTable.AddCell(new Cell().SetBorder(Border.NO_BORDER)
+                .Add(new Paragraph("STR #:").SetFont(normalFont).SetFontSize(7).SetFontColor(TEXT_SECONDARY)));
+            ntnTable.AddCell(new Cell().SetBorder(Border.NO_BORDER)
+                .Add(new Paragraph(company.StrNo ?? "N/A").SetFont(boldFont).SetFontSize(8).SetFontColor(PRIMARY_COLOR)));
+
+            ntnCell.Add(ntnTable);
             headerTable.AddCell(ntnCell);
 
             doc.Add(headerTable);
 
-            // Title Bar
-            Table titleBar = new Table(1).UseAllAvailableWidth().SetMarginBottom(5);
-            Cell titleCell = new Cell()
-                .SetBackgroundColor(PRIMARY_COLOR)
-                .SetBorder(Border.NO_BORDER)
-                .SetPadding(5)
-                .SetTextAlignment(TextAlignment.CENTER);
+            // Invoice Title Bar
+            Table titleBar = new Table(UnitValue.CreatePercentArray(new float[] { 4f, 0f, 0f }))
+                .UseAllAvailableWidth()
+                .SetMarginBottom(5);
 
-            titleCell.Add(new Paragraph("SALES TAX INVOICE")
+            // Title
+            Cell titleCell = new Cell()
+                .SetBackgroundColor(TABLE_HEADER)
+                .SetBorder(Border.NO_BORDER)
+                .SetPadding(4)
+                .SetVerticalAlignment(VerticalAlignment.MIDDLE);
+
+            string invoiceTitle = invoice.InvoiceType == "Credit Memo" ? "CREDIT NOTE" : "SALES TAX INVOICE";
+            titleCell.Add(new Paragraph(invoiceTitle)
                 .SetFont(boldFont)
-                .SetFontSize(11)
+                .SetFontSize(10)
                 .SetFontColor(ColorConstants.WHITE));
 
             titleBar.AddCell(titleCell);
+
             doc.Add(titleBar);
+        }
+
+        private void AddFallbackLogo(Cell logoCell, Company company, PdfFont boldFont)
+        {
+            string initials = "CO";
+            if (!string.IsNullOrEmpty(company.CompanyName) && company.CompanyName.Length > 0)
+            {
+                var words = company.CompanyName.Split(' ');
+                if (words.Length >= 2)
+                    initials = $"{words[0][0]}{words[1][0]}".ToUpper();
+                else
+                    initials = company.CompanyName.Substring(0, Math.Min(2, company.CompanyName.Length)).ToUpper();
+            }
+
+            logoCell.Add(new Paragraph(initials)
+                .SetFont(boldFont)
+                .SetFontSize(16)
+                .SetFontColor(PRIMARY_COLOR)
+                .SetBackgroundColor(LIGHT_BG)
+                .SetPadding(8)
+                .SetTextAlignment(TextAlignment.CENTER));
         }
 
         #endregion
 
-        #region Compact Party Details
+        #region Party Details Section
 
-        private void AddPartyDetailsCompact(Document doc, Invoice invoice, Company company,
+        private void AddPartyDetails(Document doc, Invoice invoice, Company company,
             PdfFont boldFont, PdfFont normalFont)
         {
-            // ✅ 2-Column Layout: Customer Details (LEFT) | Invoice Details (RIGHT)
-            Table partyTable = new Table(UnitValue.CreatePercentArray(new float[] { 1.5f, 1f }))
+            Customer customer = invoice.Customer;
+
+            // Two column layout: Seller | Buyer
+            Table partyTable = new Table(UnitValue.CreatePercentArray(new float[] { 1f, 1f }))
                 .UseAllAvailableWidth()
-                .SetMarginBottom(8);
+                .SetMarginBottom(6);
 
-            // LEFT: Customer Details (with all information)
-            Cell customerCell = new Cell()
+            // LEFT: Buyer Details
+            Cell buyerCell = new Cell()
                 .SetBorder(new SolidBorder(BORDER_COLOR, 0.5f))
-                .SetPadding(8)
-                .SetVerticalAlignment(VerticalAlignment.TOP);
+                .SetPadding(6)
+                .SetBackgroundColor(ColorConstants.WHITE);
 
-            // Customer Name
-            customerCell.Add(new Paragraph($"To: M/s {invoice.CustomerName ?? "N/A"}")
+            buyerCell.Add(new Paragraph("BUYER DETAILS")
+                .SetFont(boldFont)
+                .SetFontSize(7)
+                .SetFontColor(TEXT_SECONDARY)
+                .SetMarginBottom(3));
+
+            buyerCell.Add(new Paragraph($"M/s {customer?.CustomerName ?? "N/A"}")
                 .SetFont(boldFont)
                 .SetFontSize(8)
                 .SetFontColor(TEXT_PRIMARY)
-                .SetMarginBottom(4));
+                .SetMarginBottom(2));
 
-            // Address
-            if (!string.IsNullOrEmpty(invoice.CustomerAddress))
-            {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("📍 ").SetFontSize(7))
-                    .Add(new Text(invoice.CustomerAddress)
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
-            else
-            {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("📍 ").SetFontSize(7))
-                    .Add(new Text("N/A")
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
+            // Buyer details
+            AddDetailRow(buyerCell, "NTN", customer?.CustomerNTN, normalFont, boldFont);
+            AddDetailRow(buyerCell, "STR #", customer?.CustomerStrNo, normalFont, boldFont);
 
-            // Phone
-            if (!string.IsNullOrEmpty(invoice.CustomerPhone))
+            // Address (if exists)
+            if (!string.IsNullOrEmpty(customer?.CustomerAddress))
             {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("📞 ").SetFontSize(7))
-                    .Add(new Text(invoice.CustomerPhone)
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
-            else
-            {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("📞 ").SetFontSize(7))
-                    .Add(new Text("N/A")
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
-
-            // Email
-            if (!string.IsNullOrEmpty(invoice.CustomerEmail))
-            {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("✉ ").SetFontSize(7))
-                    .Add(new Text(invoice.CustomerEmail)
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
-            else
-            {
-                customerCell.Add(new Paragraph()
-                    .Add(new Text("✉ ").SetFontSize(7))
-                    .Add(new Text("N/A")
-                        .SetFont(normalFont)
-                        .SetFontSize(7)
-                        .SetFontColor(TEXT_SECONDARY))
-                    .SetMarginBottom(3));
-            }
-
-            // NTN
-            customerCell.Add(new Paragraph()
-                .Add(new Text("NTN: ")
+                buyerCell.Add(new Paragraph($"📍 {customer.CustomerAddress}")
                     .SetFont(normalFont)
-                    .SetFontSize(7)
-                    .SetFontColor(TEXT_SECONDARY))
-                .Add(new Text(invoice.CustomerNTN ?? "N/A")
-                    .SetFont(boldFont)
-                    .SetFontSize(8)
-                    .SetFontColor(PRIMARY_COLOR)));
+                    .SetFontSize(6)
+                    .SetFontColor(TEXT_SECONDARY)
+                    .SetMarginTop(2));
+            }
 
-            partyTable.AddCell(customerCell);
+            // Contact info
+            var contactInfo = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrEmpty(customer?.CustomerPhone)) contactInfo.Add($"📞 {customer.CustomerPhone}");
+            if (!string.IsNullOrEmpty(customer?.CustomerEmail)) contactInfo.Add($"✉ {customer.CustomerEmail}");
 
-            // RIGHT: Invoice Details
-            Cell invoiceCell = new Cell()
+            if (contactInfo.Count > 0)
+            {
+                buyerCell.Add(new Paragraph(string.Join("  ", contactInfo))
+                    .SetFont(normalFont)
+                    .SetFontSize(6)
+                    .SetFontColor(TEXT_SECONDARY));
+            }
+
+            partyTable.AddCell(buyerCell);
+
+            // Right: invoice Details
+            Cell sellerCell = new Cell()
                 .SetBorder(new SolidBorder(BORDER_COLOR, 0.5f))
-                .SetPadding(8)
-                .SetVerticalAlignment(VerticalAlignment.TOP);
+                .SetPadding(6)
+                .SetBackgroundColor(ColorConstants.WHITE);
 
-            invoiceCell.Add(new Paragraph($"Invoice #: {invoice.InvoiceNumber ?? "N/A"}")
-                .SetFont(boldFont)
-                .SetFontSize(8)
-                .SetFontColor(TEXT_PRIMARY)
-                .SetMarginBottom(4));
+            string dateStr = invoice.InvoiceDate != DateTime.MinValue
+                ? invoice.InvoiceDate.ToString("dd-MMM-yyyy")
+                : "N/A";
 
-            invoiceCell.Add(new Paragraph($"Date: {(invoice.InvoiceDate != DateTime.MinValue ? invoice.InvoiceDate.ToString("dd-MM-yyyy") : "N/A")}")
-                .SetFont(normalFont)
-                .SetFontSize(8)
-                .SetFontColor(TEXT_SECONDARY));
+            AddDetailRow(sellerCell, "Invoice No", invoice.InvoiceNumber, normalFont, boldFont);
+            AddDetailRow(sellerCell, "Date :", dateStr, normalFont, boldFont);
 
-            partyTable.AddCell(invoiceCell);
+            partyTable.AddCell(sellerCell);
 
             doc.Add(partyTable);
         }
 
+        private void AddDetailRow(Cell cell, string label, string value, PdfFont normalFont, PdfFont boldFont)
+        {
+            var para = new Paragraph()
+                .Add(new Text($"{label}: ").SetFont(normalFont).SetFontSize(6.5f).SetFontColor(TEXT_SECONDARY))
+                .Add(new Text(value ?? "N/A").SetFont(boldFont ?? normalFont).SetFontSize(7).SetFontColor(TEXT_PRIMARY))
+                .SetMarginBottom(1);
+
+            cell.Add(para);
+        }
+
         #endregion
 
-        #region Compact Items Table
+        #region Items Table
 
-        private void AddItemsTableCompact(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
+        private void AddItemsTable(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
         {
             if (invoice.Items == null || invoice.Items.Count == 0)
             {
@@ -384,18 +344,17 @@ namespace C2B_FBR_Connect.Services
                     .SetFont(normalFont)
                     .SetFontSize(8)
                     .SetTextAlignment(TextAlignment.CENTER)
-                    .SetMarginTop(10)
-                    .SetMarginBottom(10));
+                    .SetPadding(10));
                 return;
             }
 
-            // Ultra-compact table for 20+ items
+            // Optimized column widths for maximum items
             Table itemsTable = new Table(UnitValue.CreatePercentArray(
-                new float[] { 0.4f, 2.2f, 1f, 0.6f, 0.9f, 0.9f, 0.9f, 1f }))
+                new float[] { 0.35f, 2.4f, 0.9f, 0.5f, 0.8f, 0.85f, 0.7f, 0.9f }))
                 .UseAllAvailableWidth()
-                .SetMarginBottom(5);
+                .SetMarginBottom(4);
 
-            // Headers - very compact
+            // Header row
             string[] headers = { "#", "Description", "HS Code", "Qty", "Rate", "Amount", "Disc", "Net" };
 
             foreach (var header in headers)
@@ -403,18 +362,18 @@ namespace C2B_FBR_Connect.Services
                 Cell headerCell = new Cell()
                     .Add(new Paragraph(header)
                         .SetFont(boldFont)
-                        .SetFontSize(7)
+                        .SetFontSize(6.5f)
                         .SetFontColor(ColorConstants.WHITE))
                     .SetBackgroundColor(TABLE_HEADER)
                     .SetTextAlignment(TextAlignment.CENTER)
                     .SetVerticalAlignment(VerticalAlignment.MIDDLE)
-                    .SetPadding(3)
-                    .SetBorder(new SolidBorder(ColorConstants.WHITE, 0.5f));
+                    .SetPadding(2.5f)
+                    .SetBorder(new SolidBorder(ColorConstants.WHITE, 0.3f));
 
                 itemsTable.AddHeaderCell(headerCell);
             }
 
-            // Items - ultra compact rows
+            // Item rows
             int index = 1;
             foreach (var item in invoice.Items)
             {
@@ -424,15 +383,15 @@ namespace C2B_FBR_Connect.Services
 
                 var rowColor = index % 2 == 0 ? TABLE_ALT_ROW : ColorConstants.WHITE;
 
-                // Ultra-compact cells with 6pt font and 2pt padding
-                AddCompactCell(itemsTable, index.ToString(), TextAlignment.CENTER, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, item.ItemName ?? "Item", TextAlignment.LEFT, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, item.HSCode ?? "-", TextAlignment.CENTER, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, item.Quantity.ToString("N0"), TextAlignment.CENTER, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, unitRate.ToString("N2"), TextAlignment.RIGHT, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, grossAmount.ToString("N2"), TextAlignment.RIGHT, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, item.Discount.ToString("N2"), TextAlignment.RIGHT, normalFont, 6, rowColor);
-                AddCompactCell(itemsTable, netAmount.ToString("N2"), TextAlignment.RIGHT, boldFont, 6, rowColor);
+                // Ultra compact cells
+                AddTableCell(itemsTable, index.ToString(), TextAlignment.CENTER, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, TruncateText(item.ItemName ?? "Item", 35), TextAlignment.LEFT, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, item.HSCode ?? "-", TextAlignment.CENTER, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, item.Quantity.ToString("N0"), TextAlignment.CENTER, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, unitRate.ToString("N2"), TextAlignment.RIGHT, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, grossAmount.ToString("N2"), TextAlignment.RIGHT, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, item.Discount > 0 ? item.Discount.ToString("N2") : "-", TextAlignment.RIGHT, normalFont, 6, rowColor);
+                AddTableCell(itemsTable, netAmount.ToString("N2"), TextAlignment.RIGHT, boldFont, 6, rowColor);
 
                 index++;
             }
@@ -440,7 +399,7 @@ namespace C2B_FBR_Connect.Services
             doc.Add(itemsTable);
         }
 
-        private void AddCompactCell(Table table, string text, TextAlignment align, PdfFont font,
+        private void AddTableCell(Table table, string text, TextAlignment align, PdfFont font,
             float fontSize, iText.Kernel.Colors.Color bgColor)
         {
             Cell cell = new Cell()
@@ -450,23 +409,28 @@ namespace C2B_FBR_Connect.Services
                     .SetFontColor(TEXT_PRIMARY))
                 .SetTextAlignment(align)
                 .SetVerticalAlignment(VerticalAlignment.MIDDLE)
-                .SetPadding(2)
+                .SetPadding(1.5f)
                 .SetBackgroundColor(bgColor)
-                .SetBorder(new SolidBorder(BORDER_COLOR, 0.3f));
+                .SetBorder(new SolidBorder(BORDER_COLOR, 0.25f));
 
             table.AddCell(cell);
         }
 
+        private string TruncateText(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text) || text.Length <= maxLength)
+                return text;
+            return text.Substring(0, maxLength - 2) + "..";
+        }
+
         #endregion
 
-        #region Compact Summary
+        #region Summary Section
 
-        private void AddCompactSummary(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
+        private void AddSummarySection(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
         {
             // Calculate totals
-            decimal grossAmount = 0;
-            decimal discount = 0;
-            decimal salesTax = 0;
+            decimal grossAmount = 0, discount = 0, salesTax = 0;
 
             if (invoice.Items != null)
             {
@@ -482,59 +446,58 @@ namespace C2B_FBR_Connect.Services
             decimal subtotal = grossAmount - discount;
             decimal grandTotal = subtotal + salesTax;
 
-            // Amount in words - ultra compact (full width)
-            string amountInWords = NumberToWords((long)Math.Round(grandTotal));
-
-            doc.Add(new Paragraph($"Amount in Words: Rupees {amountInWords} only")
-                .SetFont(normalFont)
-                .SetFontSize(7)
-                .SetFontColor(TEXT_SECONDARY)
-                .SetBackgroundColor(new DeviceRgb(255, 251, 230))
-                .SetPadding(4)
-                .SetMarginBottom(5));
-
-            // Split layout: Empty left space, Totals on right
-            Table mainTable = new Table(UnitValue.CreatePercentArray(new float[] { 1f, 1.2f }))
+            // Main layout: Amount in words (left) | Totals (right)
+            Table summaryTable = new Table(UnitValue.CreatePercentArray(new float[] { 1.5f, 1f }))
                 .UseAllAvailableWidth()
-                .SetMarginBottom(10);
+                .SetMarginBottom(8);
 
-            // LEFT: Empty space
-            Cell leftCell = new Cell()
-                .SetBorder(Border.NO_BORDER)
-                .SetPadding(0);
+            // LEFT: Amount in words
+            Cell wordsCell = new Cell()
+                .SetBorder(new SolidBorder(BORDER_COLOR, 0.5f))
+                .SetBackgroundColor(HIGHLIGHT_BG)
+                .SetPadding(6)
+                .SetVerticalAlignment(VerticalAlignment.TOP);
 
-            leftCell.Add(new Paragraph("")
+            wordsCell.Add(new Paragraph("Amount in Words:")
+                .SetFont(boldFont)
+                .SetFontSize(6.5f)
+                .SetFontColor(TEXT_SECONDARY)
+                .SetMarginBottom(2));
+
+            string amountInWords = NumberToWords((long)Math.Round(grandTotal));
+            wordsCell.Add(new Paragraph($"Rupees {amountInWords} Only")
                 .SetFont(normalFont)
                 .SetFontSize(7)
-                .SetFontColor(TEXT_SECONDARY));
+                .SetFontColor(TEXT_PRIMARY));
 
-            mainTable.AddCell(leftCell);
+            summaryTable.AddCell(wordsCell);
 
             // RIGHT: Financial Summary
             Cell totalsCell = new Cell()
-                .SetBorder(new SolidBorder(BORDER_COLOR, 1))
-                .SetPadding(6);
+                .SetBorder(new SolidBorder(BORDER_COLOR, 0.5f))
+                .SetPadding(4);
 
-            Table totalsTable = new Table(UnitValue.CreatePercentArray(new float[] { 1.5f, 1f }))
+            Table totalsTable = new Table(UnitValue.CreatePercentArray(new float[] { 1.2f, 1f }))
                 .UseAllAvailableWidth();
 
-            AddCompactSummaryRow(totalsTable, "Gross Amount:", grossAmount.ToString("N2"), normalFont, false);
-            AddCompactSummaryRow(totalsTable, "Discount:", discount.ToString("N2"), normalFont, false);
-            AddCompactSummaryRow(totalsTable, "Subtotal:", subtotal.ToString("N2"), normalFont, false);
-            AddCompactSummaryRow(totalsTable, "Sales Tax:", salesTax.ToString("N2"), normalFont, false);
-            AddCompactSummaryRow(totalsTable, "GRAND TOTAL:", grandTotal.ToString("N2"), boldFont, true);
+            AddSummaryRow(totalsTable, "Gross Amount", grossAmount.ToString("N2"), normalFont, false);
+            AddSummaryRow(totalsTable, "Discount", $"({discount.ToString("N2")})", normalFont, false);
+            AddSummaryRow(totalsTable, "Subtotal", subtotal.ToString("N2"), normalFont, false);
+            AddSummaryRow(totalsTable, "Sales Tax", salesTax.ToString("N2"), normalFont, false);
+            AddSummaryRow(totalsTable, "GRAND TOTAL", $"Rs. {grandTotal.ToString("N2")}", boldFont, true);
 
             totalsCell.Add(totalsTable);
-            mainTable.AddCell(totalsCell);
+            summaryTable.AddCell(totalsCell);
 
-            doc.Add(mainTable);
+            doc.Add(summaryTable);
         }
 
-        private void AddCompactSummaryRow(Table table, string label, string value, PdfFont font, bool isTotal)
+        private void AddSummaryRow(Table table, string label, string value, PdfFont font, bool isTotal)
         {
             var bgColor = isTotal ? ACCENT_GREEN : ColorConstants.WHITE;
             var textColor = isTotal ? ColorConstants.WHITE : TEXT_PRIMARY;
-            var fontSize = isTotal ? 8f : 7f;
+            var fontSize = isTotal ? 7.5f : 6.5f;
+            var borderColor = isTotal ? ACCENT_GREEN : BORDER_COLOR;
 
             Cell labelCell = new Cell()
                 .Add(new Paragraph(label)
@@ -542,9 +505,9 @@ namespace C2B_FBR_Connect.Services
                     .SetFontSize(fontSize)
                     .SetFontColor(textColor))
                 .SetBackgroundColor(bgColor)
-                .SetBorder(new SolidBorder(BORDER_COLOR, 0.3f))
+                .SetBorder(new SolidBorder(borderColor, 0.3f))
                 .SetTextAlignment(TextAlignment.LEFT)
-                .SetPadding(3);
+                .SetPadding(2.5f);
 
             Cell valueCell = new Cell()
                 .Add(new Paragraph(value)
@@ -552,9 +515,9 @@ namespace C2B_FBR_Connect.Services
                     .SetFontSize(fontSize)
                     .SetFontColor(textColor))
                 .SetBackgroundColor(bgColor)
-                .SetBorder(new SolidBorder(BORDER_COLOR, 0.3f))
+                .SetBorder(new SolidBorder(borderColor, 0.3f))
                 .SetTextAlignment(TextAlignment.RIGHT)
-                .SetPadding(3);
+                .SetPadding(2.5f);
 
             table.AddCell(labelCell);
             table.AddCell(valueCell);
@@ -562,9 +525,9 @@ namespace C2B_FBR_Connect.Services
 
         #endregion
 
-        #region FBR Section Above Footer
+        #region FBR Section
 
-        private void AddFBRSectionAboveFooter(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
+        private void AddFBRSection(Document doc, Invoice invoice, PdfFont boldFont, PdfFont normalFont)
         {
             PdfDocument pdfDoc = doc.GetPdfDocument();
             int numberOfPages = pdfDoc.GetNumberOfPages();
@@ -575,189 +538,185 @@ namespace C2B_FBR_Connect.Services
                 iText.Kernel.Geom.Rectangle pageSize = page.GetPageSize();
                 PdfCanvas canvas = new PdfCanvas(page);
 
-                // ✅ Increased dimensions for larger FBR logo and QR code
-                float fbrLogoSize = 60f;  // Increased from 30 to 60
-                float qrCodeSize = 72f;   // 1.0 inch (as per specification)
-                float maxElementSize = Math.Max(fbrLogoSize, qrCodeSize);  // 72
+                float qrCodeSize = 72f;  // 1.0 inch as per FBR spec
+                float fbrLogoSize = 55f;
+                float borderHeight = 85f;
+                float borderPadding = 8f;
 
-                // ✅ Calculate border height based on largest element + padding
-                float borderPadding = 10f;
-                float borderHeight = maxElementSize + (borderPadding * 2);  // 72 + 20 = 92
+                float fbrY = 55;
+                float leftX = pageSize.GetLeft() + 12;
+                float rightX = pageSize.GetRight() - 12;
+                float borderWidth = pageSize.GetWidth() - 24;
 
-                float fbrY = 60;
-                float leftX = pageSize.GetLeft() + 15;
-                float rightX = pageSize.GetRight() - 15;
-                float borderWidth = pageSize.GetWidth() - 30;
-
-                // ✅ Draw FBR section border (expanded)
+                // FBR section border
                 canvas.SaveState();
                 canvas.SetStrokeColor(PRIMARY_COLOR);
                 canvas.SetLineWidth(1.5f);
                 canvas.Rectangle(leftX, fbrY, borderWidth, borderHeight);
                 canvas.Stroke();
+
+                // FBR label background
+                canvas.SetFillColor(PRIMARY_COLOR);
+                canvas.Rectangle(leftX, fbrY + borderHeight - 15, 80, 15);
+                canvas.Fill();
                 canvas.RestoreState();
 
-                // ✅ LEFT: FBR Logo (60x60 - doubled in size)
-                string fbrLogoPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "fbr_logo.png");
-                if (File.Exists(fbrLogoPath))
-                {
-                    try
-                    {
-                        var fbrLogoData = ImageDataFactory.Create(fbrLogoPath);
-                        var fbrLogoImage = new iText.Layout.Element.Image(fbrLogoData);
+                // FBR label text
+                canvas.SaveState();
+                canvas.BeginText();
+                canvas.SetFontAndSize(boldFont, 7);
+                canvas.SetFillColor(ColorConstants.WHITE);
+                canvas.MoveText(leftX + 8, fbrY + borderHeight - 11);
+                canvas.ShowText("FBR VERIFICATION");
+                canvas.EndText();
+                canvas.RestoreState();
 
-                        // Get original dimensions and scale proportionally
-                        float originalWidth = fbrLogoImage.GetImageWidth();
-                        float originalHeight = fbrLogoImage.GetImageHeight();
-                        float maxLogoSize = fbrLogoSize;
+                // FBR Logo
+                AddFBRLogo(doc, canvas, leftX + borderPadding, fbrY, borderHeight, fbrLogoSize, boldFont, i);
 
-                        float widthRatio = maxLogoSize / originalWidth;
-                        float heightRatio = maxLogoSize / originalHeight;
-                        float logoScaleFactor = Math.Min(widthRatio, heightRatio);
+                // FBR Invoice details (center)
+                float centerX = leftX + fbrLogoSize + 25;
+                float textY = fbrY + borderHeight - 35;
 
-                        float scaledLogoWidth = originalWidth * logoScaleFactor;
-                        float scaledLogoHeight = originalHeight * logoScaleFactor;
-
-                        var fbrLogo = new iText.Layout.Element.Image(fbrLogoData)
-                            .SetWidth(scaledLogoWidth)
-                            .SetHeight(scaledLogoHeight);
-
-                        // Center vertically within border
-                        float logoYPosition = fbrY + (borderHeight - scaledLogoHeight) / 2;
-                        fbrLogo.SetFixedPosition(i, leftX + borderPadding, logoYPosition);
-                        doc.Add(fbrLogo);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error loading FBR logo: {ex.Message}");
-
-                        // Fallback: Draw "FBR" text
-                        canvas.SaveState();
-                        canvas.BeginText();
-                        canvas.SetFontAndSize(boldFont, 16);
-                        canvas.SetFillColor(PRIMARY_COLOR);
-                        canvas.MoveText(leftX + borderPadding + 10, fbrY + borderHeight / 2);
-                        canvas.ShowText("FBR");
-                        canvas.EndText();
-                        canvas.RestoreState();
-                    }
-                }
-                else
-                {
-                    // Fallback: Draw "FBR" text if logo not found
-                    canvas.SaveState();
-                    canvas.BeginText();
-                    canvas.SetFontAndSize(boldFont, 16);
-                    canvas.SetFillColor(PRIMARY_COLOR);
-                    canvas.MoveText(leftX + borderPadding + 10, fbrY + borderHeight / 2);
-                    canvas.ShowText("FBR");
-                    canvas.EndText();
-                    canvas.RestoreState();
-                }
-
-                // ✅ CENTER: FBR Invoice text and number (adjusted for new height)
-                float centerTextY = fbrY + (borderHeight / 2) + 10;
+                canvas.SaveState();
+                canvas.BeginText();
+                canvas.SetFontAndSize(normalFont, 7);
+                canvas.SetFillColor(TEXT_SECONDARY);
+                canvas.MoveText(centerX, textY);
+                canvas.ShowText("FBR Invoice Reference Number (IRN):");
+                canvas.EndText();
+                canvas.RestoreState();
 
                 canvas.SaveState();
                 canvas.BeginText();
                 canvas.SetFontAndSize(boldFont, 9);
                 canvas.SetFillColor(PRIMARY_COLOR);
-                canvas.MoveText(leftX + fbrLogoSize + borderPadding + 20, centerTextY);
-                canvas.ShowText("FBR Invoice #");
-                canvas.EndText();
-                canvas.RestoreState();
-
-                canvas.SaveState();
-                canvas.BeginText();
-                canvas.SetFontAndSize(normalFont, 8);
-                canvas.SetFillColor(TEXT_SECONDARY);
-                string fbrIRN = invoice.FBR_IRN ?? "PENDING";
-                canvas.MoveText(leftX + fbrLogoSize + borderPadding + 20, centerTextY - 15);
+                string fbrIRN = invoice.FBR_IRN ?? "PENDING UPLOAD";
+                canvas.MoveText(centerX, textY - 14);
                 canvas.ShowText(fbrIRN);
                 canvas.EndText();
                 canvas.RestoreState();
 
-                // ✅ RIGHT: QR Code - Version 2.0 (1.0 x 1.0 inch = 72x72 points)
-                if (!string.IsNullOrEmpty(invoice.FBR_IRN))
-                {
-                    try
-                    {
-                        var qrData = GenerateQRCodeVersion2(invoice.FBR_IRN);
-                        var qrImage = new iText.Layout.Element.Image(qrData)
-                            .SetWidth(qrCodeSize)
-                            .SetHeight(qrCodeSize);
+                // Verification instruction
+                canvas.SaveState();
+                canvas.BeginText();
+                canvas.SetFontAndSize(normalFont, 6);
+                canvas.SetFillColor(TEXT_SECONDARY);
+                canvas.MoveText(centerX, textY - 30);
+                canvas.ShowText("Scan QR code or visit fbr.gov.pk to verify");
+                canvas.EndText();
+                canvas.RestoreState();
 
-                        // Center QR code vertically within border
-                        float qrYPosition = fbrY + (borderHeight - qrCodeSize) / 2;
-                        qrImage.SetFixedPosition(i, rightX - qrCodeSize - borderPadding, qrYPosition);
-                        doc.Add(qrImage);
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error generating QR code: {ex.Message}");
-
-                        // Fallback: Draw placeholder
-                        canvas.SaveState();
-                        canvas.SetStrokeColor(BORDER_COLOR);
-                        canvas.SetLineWidth(1);
-                        float qrYPosition = fbrY + (borderHeight - qrCodeSize) / 2;
-                        canvas.Rectangle(rightX - qrCodeSize - borderPadding, qrYPosition, qrCodeSize, qrCodeSize);
-                        canvas.Stroke();
-
-                        canvas.BeginText();
-                        canvas.SetFontAndSize(normalFont, 8);
-                        canvas.SetFillColor(TEXT_SECONDARY);
-                        canvas.MoveText(rightX - qrCodeSize - borderPadding + 20, qrYPosition + qrCodeSize / 2);
-                        canvas.ShowText("QR Pending");
-                        canvas.EndText();
-                        canvas.RestoreState();
-                    }
-                }
-                else
-                {
-                    // Draw "QR Pending" placeholder
-                    canvas.SaveState();
-                    canvas.SetStrokeColor(BORDER_COLOR);
-                    canvas.SetLineWidth(1);
-                    float qrYPosition = fbrY + (borderHeight - qrCodeSize) / 2;
-                    canvas.Rectangle(rightX - qrCodeSize - borderPadding, qrYPosition, qrCodeSize, qrCodeSize);
-                    canvas.Stroke();
-
-                    canvas.BeginText();
-                    canvas.SetFontAndSize(normalFont, 8);
-                    canvas.SetFillColor(TEXT_SECONDARY);
-                    canvas.MoveText(rightX - qrCodeSize - borderPadding + 20, qrYPosition + qrCodeSize / 2);
-                    canvas.ShowText("QR Pending");
-                    canvas.EndText();
-                    canvas.RestoreState();
-                }
+                // QR Code
+                AddQRCode(doc, canvas, invoice, rightX - qrCodeSize - borderPadding, fbrY, borderHeight, qrCodeSize, normalFont, i);
             }
         }
 
-        #endregion
+        private void AddFBRLogo(Document doc, PdfCanvas canvas, float x, float fbrY, float borderHeight,
+            float logoSize, PdfFont boldFont, int pageNum)
+        {
+            string fbrLogoPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "fbr_logo.png");
 
-        #region QR Code Generation - Version 2.0
+            if (File.Exists(fbrLogoPath))
+            {
+                try
+                {
+                    var fbrLogoData = ImageDataFactory.Create(fbrLogoPath);
+                    var fbrLogoImage = new iText.Layout.Element.Image(fbrLogoData);
 
-        /// <summary>
-        /// Generates QR Code Version 2.0 (25×25 modules) at 1.0 x 1.0 inch size
-        /// </summary>
-        private ImageData GenerateQRCodeVersion2(string content)
+                    float widthRatio = logoSize / fbrLogoImage.GetImageWidth();
+                    float heightRatio = logoSize / fbrLogoImage.GetImageHeight();
+                    float scaleFactor = Math.Min(widthRatio, heightRatio);
+
+                    float scaledWidth = fbrLogoImage.GetImageWidth() * scaleFactor;
+                    float scaledHeight = fbrLogoImage.GetImageHeight() * scaleFactor;
+
+                    var logo = new iText.Layout.Element.Image(fbrLogoData)
+                        .SetWidth(scaledWidth)
+                        .SetHeight(scaledHeight);
+
+                    float logoY = fbrY + (borderHeight - scaledHeight) / 2 - 5;
+                    logo.SetFixedPosition(pageNum, x, logoY);
+                    doc.Add(logo);
+                }
+                catch
+                {
+                    DrawFBRFallback(canvas, x, fbrY, borderHeight, boldFont);
+                }
+            }
+            else
+            {
+                DrawFBRFallback(canvas, x, fbrY, borderHeight, boldFont);
+            }
+        }
+
+        private void DrawFBRFallback(PdfCanvas canvas, float x, float fbrY, float borderHeight, PdfFont boldFont)
+        {
+            canvas.SaveState();
+            canvas.BeginText();
+            canvas.SetFontAndSize(boldFont, 18);
+            canvas.SetFillColor(PRIMARY_COLOR);
+            canvas.MoveText(x + 5, fbrY + borderHeight / 2 - 5);
+            canvas.ShowText("FBR");
+            canvas.EndText();
+            canvas.RestoreState();
+        }
+
+        private void AddQRCode(Document doc, PdfCanvas canvas, Invoice invoice, float x, float fbrY,
+            float borderHeight, float qrSize, PdfFont normalFont, int pageNum)
+        {
+            float qrY = fbrY + (borderHeight - qrSize) / 2 - 3;
+
+            if (!string.IsNullOrEmpty(invoice.FBR_IRN))
+            {
+                try
+                {
+                    var qrData = GenerateQRCode(invoice.FBR_IRN);
+                    var qrImage = new iText.Layout.Element.Image(qrData)
+                        .SetWidth(qrSize)
+                        .SetHeight(qrSize);
+
+                    qrImage.SetFixedPosition(pageNum, x, qrY);
+                    doc.Add(qrImage);
+                }
+                catch
+                {
+                    DrawQRPlaceholder(canvas, x, qrY, qrSize, normalFont, "QR Error");
+                }
+            }
+            else
+            {
+                DrawQRPlaceholder(canvas, x, qrY, qrSize, normalFont, "QR Pending");
+            }
+        }
+
+        private void DrawQRPlaceholder(PdfCanvas canvas, float x, float y, float size, PdfFont font, string text)
+        {
+            canvas.SaveState();
+            canvas.SetStrokeColor(BORDER_COLOR);
+            canvas.SetFillColor(LIGHT_BG);
+            canvas.SetLineWidth(1);
+            canvas.Rectangle(x, y, size, size);
+            canvas.FillStroke();
+
+            canvas.BeginText();
+            canvas.SetFontAndSize(font, 8);
+            canvas.SetFillColor(TEXT_SECONDARY);
+            canvas.MoveText(x + size / 2 - 20, y + size / 2);
+            canvas.ShowText(text);
+            canvas.EndText();
+            canvas.RestoreState();
+        }
+
+        private ImageData GenerateQRCode(string content)
         {
             using var qrGenerator = new QRCodeGenerator();
-
-            // QR Code Version 2.0 (25×25 modules) with Error Correction Level M
             using var qrCodeData = qrGenerator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M);
             using var qrCode = new QRCode(qrCodeData);
 
-            // Calculate pixels per module for 1 inch at 300 DPI
-            // 1 inch = 72 points in PDF
-            // At 300 DPI: 1 inch = 300 pixels
-            // Version 2.0 has 25 modules
-            // Pixels per module = 300 / 25 = 12 pixels per module
-            int pixelsPerModule = 12;
-
+            // Version 2.0: 12 pixels per module for 300 DPI at 1 inch
             using var bitmap = qrCode.GetGraphic(
-                pixelsPerModule: pixelsPerModule,
+                pixelsPerModule: 12,
                 darkColor: System.Drawing.Color.Black,
                 lightColor: System.Drawing.Color.White,
                 drawQuietZones: true);
@@ -769,9 +728,9 @@ namespace C2B_FBR_Connect.Services
 
         #endregion
 
-        #region Compact Footer
+        #region Footer
 
-        private void AddCompactFooter(Document doc, PdfFont normalFont)
+        private void AddFooter(Document doc, PdfFont normalFont)
         {
             PdfDocument pdfDoc = doc.GetPdfDocument();
             int numberOfPages = pdfDoc.GetNumberOfPages();
@@ -782,13 +741,13 @@ namespace C2B_FBR_Connect.Services
                 iText.Kernel.Geom.Rectangle pageSize = page.GetPageSize();
                 PdfCanvas canvas = new PdfCanvas(page);
 
-                float footerY = 20;
+                float footerY = 18;
                 float centerX = pageSize.GetWidth() / 2;
 
                 // Footer background
                 canvas.SaveState();
-                canvas.SetFillColor(PRIMARY_COLOR);
-                canvas.Rectangle(pageSize.GetLeft(), footerY - 5, pageSize.GetWidth(), 25);
+                canvas.SetFillColor(TABLE_HEADER);
+                canvas.Rectangle(pageSize.GetLeft(), footerY - 3, pageSize.GetWidth(), 22);
                 canvas.Fill();
                 canvas.RestoreState();
 
@@ -798,7 +757,7 @@ namespace C2B_FBR_Connect.Services
                 canvas.SetFontAndSize(normalFont, 6);
                 canvas.SetFillColor(ColorConstants.WHITE);
 
-                string footerText = $"Powered By: C2B Smart App | Page {i} | Generated: {DateTime.Now:dd-MMM-yyyy HH:mm}";
+                string footerText = $"Powered by C2B Smart App  |  Page {i} of {numberOfPages}  |  Generated: {DateTime.Now:dd-MMM-yyyy HH:mm}";
                 float textWidth = normalFont.GetWidth(footerText, 6);
                 canvas.MoveText(centerX - (textWidth / 2), footerY + 5);
                 canvas.ShowText(footerText);
@@ -864,20 +823,5 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
-    }
-
-    // Extension class for additional border
-    public class BottomBorder : SolidBorder
-    {
-        public BottomBorder(iText.Kernel.Colors.Color color, float width) : base(color, width) { }
-
-        public override void Draw(PdfCanvas canvas, float x1, float y1, float x2, float y2,
-            Border.Side defaultSide, float borderWidthBefore, float borderWidthAfter)
-        {
-            if (defaultSide == Border.Side.BOTTOM)
-            {
-                base.Draw(canvas, x1, y1, x2, y2, defaultSide, borderWidthBefore, borderWidthAfter);
-            }
-        }
     }
 }

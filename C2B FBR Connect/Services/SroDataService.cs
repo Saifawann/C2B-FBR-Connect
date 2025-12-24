@@ -216,6 +216,8 @@ namespace C2B_FBR_Connect.Services
         {
             int successCount = 0;
 
+            Console.WriteLine($"🔍 Starting SRO enrichment for {items.Count} items...");
+
             // ✅ Process items that don't require SRO first (faster)
             var itemsToProcess = new List<(InvoiceItem item, bool requiresSro)>();
 

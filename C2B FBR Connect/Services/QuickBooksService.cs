@@ -19,11 +19,6 @@ namespace C2B_FBR_Connect.Services
         private SroDataService _sroDataService;
         private InvoiceTrackingService _trackingService;
 
-        // Session-scoped data with smart caching
-        private Dictionary<string, CachedData<ItemData>> _sessionItems;
-        private Dictionary<string, CachedData<CustomerData>> _sessionCustomers;
-        private Dictionary<string, PriceLevel> _sessionPriceLevels;
-
         private short _qbXmlMajorVersion = 13;
         private short _qbXmlMinorVersion = 0;
 
@@ -40,9 +35,6 @@ namespace C2B_FBR_Connect.Services
 
         public QuickBooksService()
         {
-            _sessionItems = new Dictionary<string, CachedData<ItemData>>();
-            _sessionCustomers = new Dictionary<string, CachedData<CustomerData>>();
-            _sessionPriceLevels = new Dictionary<string, PriceLevel>();
             _lastActivity = DateTime.Now;
         }
 
@@ -143,6 +135,21 @@ namespace C2B_FBR_Connect.Services
             }
         }
 
+        public CompanyInfo RefreshCompanyInfo()
+        {
+            if (!_isConnected)
+            {
+                throw new InvalidOperationException("QuickBooks is not connected.");
+            }
+
+            // Re-fetch from QuickBooks
+            FetchCompanyInfo();
+
+            LogBoth($"🔄 Company info refreshed: {_companyInfo?.Name}");
+
+            return _companyInfo;
+        }
+
         public CompanyInfo GetCompanyInfo() => _companyInfo;
 
         private void UpdateActivity()
@@ -153,137 +160,6 @@ namespace C2B_FBR_Connect.Services
         public bool IsConnectionActive()
         {
             return _isConnected && (DateTime.Now - _lastActivity) < _connectionTimeout;
-        }
-
-        #endregion
-
-        #region Session Data Management
-
-        /// <summary>
-        /// ✅ OPTIMIZED: Pre-load with parallel processing and smart batching
-        /// </summary>
-        public void PreloadInvoiceData(IInvoiceRetList invoiceRetList)
-        {
-            var itemIds = new HashSet<string>();
-            var customerIds = new HashSet<string>();
-
-            LogBoth($"\n🔍 === PRE-LOADING INVOICE DATA (OPTIMIZED) ===");
-            var startTime = DateTime.Now;
-
-            for (int i = 0; i < invoiceRetList.Count; i++)
-            {
-                var inv = invoiceRetList.GetAt(i);
-
-                string customerListID = inv.CustomerRef?.ListID?.GetValue();
-                if (!string.IsNullOrEmpty(customerListID))
-                    customerIds.Add(customerListID);
-
-                if (inv.ORInvoiceLineRetList != null)
-                {
-                    for (int j = 0; j < inv.ORInvoiceLineRetList.Count; j++)
-                    {
-                        var lineRet = inv.ORInvoiceLineRetList.GetAt(j);
-                        if (lineRet.InvoiceLineRet != null)
-                        {
-                            string itemListID = lineRet.InvoiceLineRet.ItemRef?.ListID?.GetValue();
-                            if (!string.IsNullOrEmpty(itemListID))
-                                itemIds.Add(itemListID);
-                        }
-                    }
-                }
-            }
-
-            LogBoth($"📊 Found {customerIds.Count} unique customers and {itemIds.Count} unique items");
-
-            var customersToFetch = customerIds.Where(id => !IsCustomerCached(id)).ToList();
-            var itemsToFetch = itemIds.Where(id => !IsItemCached(id)).ToList();
-
-            if (customersToFetch.Count > 0 || itemsToFetch.Count > 0)
-            {
-                BatchFetchAllData(customersToFetch, itemsToFetch);
-            }
-
-            var elapsed = DateTime.Now - startTime;
-            LogBoth($"✅ Pre-load complete in {elapsed.TotalSeconds:F2}s: {_sessionCustomers.Count} customers, {_sessionItems.Count} items in cache");
-            LogBoth($"=====================================\n");
-
-            UpdateActivity();
-        }
-
-        public void PreloadCreditMemoData(ICreditMemoRetList creditMemoRetList)
-        {
-            var itemIds = new HashSet<string>();
-            var customerIds = new HashSet<string>();
-
-            LogBoth($"\n🔍 === PRE-LOADING CREDIT MEMO DATA (OPTIMIZED) ===");
-            var startTime = DateTime.Now;
-
-            for (int i = 0; i < creditMemoRetList.Count; i++)
-            {
-                var memo = creditMemoRetList.GetAt(i);
-
-                string customerListID = memo.CustomerRef?.ListID?.GetValue();
-                if (!string.IsNullOrEmpty(customerListID))
-                    customerIds.Add(customerListID);
-
-                if (memo.ORCreditMemoLineRetList != null)
-                {
-                    for (int j = 0; j < memo.ORCreditMemoLineRetList.Count; j++)
-                    {
-                        var lineRet = memo.ORCreditMemoLineRetList.GetAt(j);
-                        if (lineRet.CreditMemoLineRet != null)
-                        {
-                            string itemListID = lineRet.CreditMemoLineRet.ItemRef?.ListID?.GetValue();
-                            if (!string.IsNullOrEmpty(itemListID))
-                                itemIds.Add(itemListID);
-                        }
-                    }
-                }
-            }
-
-            LogBoth($"📊 Found {customerIds.Count} unique customers and {itemIds.Count} unique items");
-
-            var customersToFetch = customerIds.Where(id => !IsCustomerCached(id)).ToList();
-            var itemsToFetch = itemIds.Where(id => !IsItemCached(id)).ToList();
-
-            if (customersToFetch.Count > 0 || itemsToFetch.Count > 0)
-            {
-                BatchFetchAllData(customersToFetch, itemsToFetch);
-            }
-
-            var elapsed = DateTime.Now - startTime;
-            LogBoth($"✅ Pre-load complete in {elapsed.TotalSeconds:F2}s: {_sessionCustomers.Count} customers, {_sessionItems.Count} items in cache");
-            LogBoth($"=====================================\n");
-
-            UpdateActivity();
-        }
-
-        private bool IsCustomerCached(string customerListID)
-        {
-            return _sessionCustomers.TryGetValue(customerListID, out var cached) && !cached.IsExpired;
-        }
-
-        private bool IsItemCached(string itemListID)
-        {
-            return _sessionItems.TryGetValue(itemListID, out var cached) && !cached.IsExpired;
-        }
-
-        public void ClearSessionData()
-        {
-            int itemCount = _sessionItems.Count;
-            int customerCount = _sessionCustomers.Count;
-            int priceLevelCount = _sessionPriceLevels.Count;
-
-            _sessionItems.Clear();
-            _sessionCustomers.Clear();
-            _sessionPriceLevels.Clear();
-
-            LogBoth($"🧹 Session data cleared: {itemCount} items, {customerCount} customers, {priceLevelCount} price levels removed");
-        }
-
-        public string GetSessionStats()
-        {
-            return $"Session Data: {_sessionCustomers.Count} customers, {_sessionItems.Count} items, {_sessionPriceLevels.Count} price levels";
         }
 
         #endregion
@@ -363,8 +239,6 @@ namespace C2B_FBR_Connect.Services
                 var invoiceRetList = response.Detail as IInvoiceRetList;
                 if (invoiceRetList != null)
                 {
-                    PreloadInvoiceData(invoiceRetList);
-
                     int skippedCount = 0;
                     for (int i = 0; i < invoiceRetList.Count; i++)
                     {
@@ -378,24 +252,22 @@ namespace C2B_FBR_Connect.Services
                         }
 
                         string customerListID = inv.CustomerRef?.ListID?.GetValue() ?? "";
-                        var customerData = FetchCustomerDetails(customerListID);
                         var uploadRecord = _trackingService.GetUploadStatus(qbInvoiceId);
 
                         invoices.Add(new Invoice
                         {
                             CompanyName = CurrentCompanyName,
                             QuickBooksInvoiceId = qbInvoiceId,
+                            QuickBooksCustomerId = customerListID,  // ✅ ADD THIS LINE
                             InvoiceNumber = inv.RefNumber?.GetValue() ?? "",
-                            CustomerName = inv.CustomerRef?.FullName?.GetValue() ?? "",
-                            CustomerNTN = customerData.NTN,
                             Amount = Convert.ToDecimal(inv.Subtotal?.GetValue() ?? 0),
                             Status = uploadRecord?.Status == UploadStatus.Success ? "Uploaded" :
-                                    uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
+            uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
                             CreatedDate = inv.TxnDate?.GetValue() ?? DateTime.Now,
                             InvoiceDate = inv.TxnDate?.GetValue() ?? DateTime.Now,
                             FBR_IRN = uploadRecord?.IRN,
                             UploadDate = uploadRecord?.UploadDate,
-                            InvoiceType = "Invoice"  // Add this field to distinguish
+                            InvoiceType = "Invoice"
                         });
                     }
 
@@ -440,8 +312,6 @@ namespace C2B_FBR_Connect.Services
                 var creditMemoRetList = response.Detail as ICreditMemoRetList;
                 if (creditMemoRetList != null)
                 {
-                    PreloadCreditMemoData(creditMemoRetList);
-
                     int skippedCount = 0;
                     for (int i = 0; i < creditMemoRetList.Count; i++)
                     {
@@ -455,24 +325,22 @@ namespace C2B_FBR_Connect.Services
                         }
 
                         string customerListID = memo.CustomerRef?.ListID?.GetValue() ?? "";
-                        var customerData = FetchCustomerDetails(customerListID);
                         var uploadRecord = _trackingService.GetUploadStatus(qbCreditMemoId);
 
                         creditMemos.Add(new Invoice
                         {
                             CompanyName = CurrentCompanyName,
                             QuickBooksInvoiceId = qbCreditMemoId,
+                            QuickBooksCustomerId = customerListID,  // ✅ ADD THIS LINE
                             InvoiceNumber = memo.RefNumber?.GetValue() ?? "",
-                            CustomerName = memo.CustomerRef?.FullName?.GetValue() ?? "",
-                            CustomerNTN = customerData.NTN,
                             Amount = Convert.ToDecimal(memo.Subtotal?.GetValue() ?? 0),
                             Status = uploadRecord?.Status == UploadStatus.Success ? "Uploaded" :
-                                    uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
+            uploadRecord?.Status == UploadStatus.Failed ? "Failed" : "Pending",
                             CreatedDate = memo.TxnDate?.GetValue() ?? DateTime.Now,
                             InvoiceDate = memo.TxnDate?.GetValue() ?? DateTime.Now,
                             FBR_IRN = uploadRecord?.IRN,
                             UploadDate = uploadRecord?.UploadDate,
-                            InvoiceType = "Credit Memo"  // Add this field to distinguish
+                            InvoiceType = "Credit Memo"
                         });
                     }
 
@@ -529,8 +397,6 @@ namespace C2B_FBR_Connect.Services
                 if (invoiceRetList == null || invoiceRetList.Count == 0)
                     return null;
 
-                PreloadInvoiceData(invoiceRetList);
-
                 var inv = invoiceRetList.GetAt(0);
 
                 string customerListID = inv.CustomerRef?.ListID?.GetValue() ?? "";
@@ -573,8 +439,6 @@ namespace C2B_FBR_Connect.Services
             }
             finally
             {
-                LogBoth(GetSessionStats());
-
                 if (!wasConnected && _isConnected)
                 {
                     CloseSession();
@@ -620,8 +484,6 @@ namespace C2B_FBR_Connect.Services
                 if (creditMemoRetList == null || creditMemoRetList.Count == 0)
                     return null;
 
-                PreloadCreditMemoData(creditMemoRetList);
-
                 var memo = creditMemoRetList.GetAt(0);
 
                 string customerListID = memo.CustomerRef?.ListID?.GetValue() ?? "";
@@ -664,8 +526,6 @@ namespace C2B_FBR_Connect.Services
             }
             finally
             {
-                LogBoth(GetSessionStats());
-
                 if (!wasConnected && _isConnected)
                 {
                     CloseSession();
@@ -753,10 +613,6 @@ namespace C2B_FBR_Connect.Services
                 LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
 
                 var invoiceLine = ConvertCreditMemoLineToInvoiceLine(line);
-
-                string lineType = isDiscount ? "DISCOUNT" : isSubtotal ? "SUBTOTAL" : "ITEM";
-
-                LogBoth($"Line {i}: [{lineType}] {itemName} = {lineAmount:C}");
 
                 lineItems.Add(new LineItemContext
                 {
@@ -1418,209 +1274,13 @@ namespace C2B_FBR_Connect.Services
 
         #endregion
 
-        #region Optimized Batch Fetching Methods
+        #region Data Fetching (No Caching)
 
-        private void BatchFetchAllData(List<string> customerIds, List<string> itemIds)
-        {
-            if ((customerIds == null || customerIds.Count == 0) && (itemIds == null || itemIds.Count == 0))
-                return;
-
-            try
-            {
-                LogBoth($"🚀 Starting optimized batch fetch: {customerIds.Count} customers, {itemIds.Count} items");
-                var startTime = DateTime.Now;
-
-                var msgSetRq = _sessionManager.CreateMsgSetRequest("US", _qbXmlMajorVersion, _qbXmlMinorVersion);
-                msgSetRq.Attributes.OnError = ENRqOnError.roeContinue;
-
-                if (customerIds.Count > 0)
-                {
-                    var customerQuery = msgSetRq.AppendCustomerQueryRq();
-
-                    if (customerIds.Count > 20)
-                    {
-                        customerQuery.OwnerIDList.Add("0");
-                        customerQuery.ORCustomerListQuery.CustomerListFilter.ActiveStatus.SetValue(ENActiveStatus.asActiveOnly);
-                        LogBoth($"   📋 Fetching ALL customers (count > 20)");
-                    }
-                    else
-                    {
-                        foreach (var id in customerIds)
-                            customerQuery.ORCustomerListQuery.ListIDList.Add(id);
-                        customerQuery.OwnerIDList.Add("0");
-                        LogBoth($"   📋 Fetching {customerIds.Count} specific customers");
-                    }
-                }
-
-                if (itemIds.Count > 0)
-                {
-                    var itemQuery = msgSetRq.AppendItemQueryRq();
-
-                    if (itemIds.Count > 20)
-                    {
-                        itemQuery.OwnerIDList.Add("0");
-                        LogBoth($"   📦 Fetching ALL items (count > 20)");
-                    }
-                    else
-                    {
-                        for (int i = 0; i < itemIds.Count; i++)
-                            itemQuery.ORListQuery.ListIDList.Add(itemIds[i]);
-                        itemQuery.OwnerIDList.Add("0");
-                        LogBoth($"   📦 Fetching {itemIds.Count} specific items");
-                    }
-                }
-
-                var msgSetRs = _sessionManager.DoRequests(msgSetRq);
-
-                for (int i = 0; i < msgSetRs.ResponseList.Count; i++)
-                {
-                    var response = msgSetRs.ResponseList.GetAt(i);
-                    if (response.StatusCode == 0)
-                    {
-                        if (response.Detail is ICustomerRetList customerList)
-                        {
-                            ProcessCustomerResults(customerList, customerIds);
-                        }
-                        else if (response.Detail is IORItemRetList itemList)
-                        {
-                            ProcessItemResults(itemList, itemIds);
-                        }
-                    }
-                }
-
-                var elapsed = DateTime.Now - startTime;
-                LogBoth($"✅ Batch fetch completed in {elapsed.TotalMilliseconds}ms");
-            }
-            catch (Exception ex)
-            {
-                LogBoth($"❌ Error in optimized batch fetch: {ex.Message}");
-                LogBoth($"   🔄 Falling back to individual fetches");
-                if (customerIds.Count > 0) BatchFetchCustomersLegacy(customerIds);
-                if (itemIds.Count > 0) BatchFetchItemsLegacy(itemIds);
-            }
-        }
-
-        private void ProcessCustomerResults(ICustomerRetList customerList, List<string> requestedIds)
-        {
-            if (customerList == null) return;
-
-            var neededIDs = new HashSet<string>(requestedIds);
-            int cached = 0;
-
-            for (int i = 0; i < customerList.Count; i++)
-            {
-                var customer = customerList.GetAt(i);
-                string listID = customer.ListID?.GetValue();
-
-                if (string.IsNullOrEmpty(listID))
-                    continue;
-
-                if (requestedIds.Count > 20 || neededIDs.Contains(listID))
-                {
-                    var customerData = ExtractCustomerData(customer);
-                    _sessionCustomers[listID] = new CachedData<CustomerData>
-                    {
-                        Data = customerData,
-                        CachedAt = DateTime.Now,
-                        ExpiresAfter = TimeSpan.FromHours(1)
-                    };
-                    cached++;
-                }
-            }
-
-            LogBoth($"   ✅ Cached {cached} customers");
-        }
-
-        private void ProcessItemResults(IORItemRetList itemList, List<string> requestedIds)
-        {
-            if (itemList == null) return;
-
-            var neededIDs = new HashSet<string>(requestedIds);
-            int cached = 0;
-
-            for (int i = 0; i < itemList.Count; i++)
-            {
-                var itemRet = itemList.GetAt(i);
-                string listID = GetItemListID(itemRet);
-
-                if (string.IsNullOrEmpty(listID))
-                    continue;
-
-                if (requestedIds.Count > 20 || neededIDs.Contains(listID))
-                {
-                    var itemData = ExtractItemData(itemRet, listID);
-                    _sessionItems[listID] = new CachedData<ItemData>
-                    {
-                        Data = itemData,
-                        CachedAt = DateTime.Now,
-                        ExpiresAfter = TimeSpan.FromHours(1)
-                    };
-                    cached++;
-                }
-            }
-
-            LogBoth($"   ✅ Cached {cached} items");
-        }
-
-        private void BatchFetchCustomersLegacy(List<string> customerListIDs)
-        {
-            foreach (var id in customerListIDs)
-            {
-                try
-                {
-                    var data = FetchCustomerDetails(id);
-                    _sessionCustomers[id] = new CachedData<CustomerData>
-                    {
-                        Data = data,
-                        CachedAt = DateTime.Now,
-                        ExpiresAfter = TimeSpan.FromHours(1)
-                    };
-                }
-                catch (Exception ex)
-                {
-                    LogBoth($"   ❌ Error fetching customer {id} in legacy fallback: {ex.Message}");
-                }
-            }
-        }
-
-        private void BatchFetchItemsLegacy(List<string> itemListIDs)
-        {
-            foreach (var id in itemListIDs)
-            {
-                try
-                {
-                    var data = FetchItemDetails(id);
-                    _sessionItems[id] = new CachedData<ItemData>
-                    {
-                        Data = data,
-                        CachedAt = DateTime.Now,
-                        ExpiresAfter = TimeSpan.FromHours(1)
-                    };
-                }
-                catch (Exception ex)
-                {
-                    LogBoth($"   ❌ Error fetching item {id} in legacy fallback: {ex.Message}");
-                }
-            }
-        }
-
-        #endregion
-
-        #region Data Fetching with Smart Cache
-
-        private CustomerData FetchCustomerDetails(string customerListID, bool forceRefresh = false)
+        public CustomerData FetchCustomerDetails(string customerListID)
         {
             if (string.IsNullOrEmpty(customerListID))
             {
                 return new CustomerData { CustomerType = "Unregistered" };
-            }
-
-            if (!forceRefresh && _sessionCustomers.TryGetValue(customerListID, out var cached))
-            {
-                if (!cached.IsExpired)
-                    return cached.Data;
-                else
-                    _sessionCustomers.Remove(customerListID);
             }
 
             LogBoth($"🔍 Fetching customer from QuickBooks (ListID: {customerListID})...");
@@ -1646,13 +1306,6 @@ namespace C2B_FBR_Connect.Services
                     {
                         var customer = customerList.GetAt(0);
                         customerData = ExtractCustomerData(customer);
-
-                        _sessionCustomers[customerListID] = new CachedData<CustomerData>
-                        {
-                            Data = customerData,
-                            CachedAt = DateTime.Now,
-                            ExpiresAfter = TimeSpan.FromHours(1)
-                        };
                     }
                 }
             }
@@ -1664,18 +1317,11 @@ namespace C2B_FBR_Connect.Services
             return customerData;
         }
 
-        private ItemData FetchItemDetails(string itemListID, bool forceRefresh = false)
+
+        private ItemData FetchItemDetails(string itemListID)
         {
             if (string.IsNullOrEmpty(itemListID))
                 return new ItemData { SaleType = "Goods at standard rate (default)" };
-
-            if (!forceRefresh && _sessionItems.TryGetValue(itemListID, out var cached))
-            {
-                if (!cached.IsExpired)
-                    return cached.Data;
-                else
-                    _sessionItems.Remove(itemListID);
-            }
 
             LogBoth($"🔍 Fetching item from QuickBooks (ListID: {itemListID})...");
 
@@ -1700,13 +1346,6 @@ namespace C2B_FBR_Connect.Services
                     {
                         var itemRet = itemList.GetAt(0);
                         itemData = ExtractItemData(itemRet, itemListID);
-
-                        _sessionItems[itemListID] = new CachedData<ItemData>
-                        {
-                            Data = itemData,
-                            CachedAt = DateTime.Now,
-                            ExpiresAfter = TimeSpan.FromHours(1)
-                        };
                     }
                 }
             }
@@ -1726,8 +1365,10 @@ namespace C2B_FBR_Connect.Services
         {
             var customerData = new CustomerData
             {
+                CustomerName = customer.Name?.GetValue() ?? customer.FullName?.GetValue() ?? "Unknown Customer",  // ✅ ADD THIS
                 Address = FormatAddress(customer.BillAddress),
-                Phone = customer.Phone?.GetValue() ?? "N/A"
+                Phone = customer.Phone?.GetValue() ?? "N/A",
+                Email = customer.Email?.GetValue() ?? ""  // ✅ ADD THIS
             };
 
             string customerTypeFromQB = customer.CustomerTypeRef?.FullName?.GetValue() ?? "";
@@ -1743,6 +1384,11 @@ namespace C2B_FBR_Connect.Services
                     if (IsNTNField(fieldName) && !string.IsNullOrEmpty(fieldValue))
                     {
                         customerData.NTN = fieldValue.Trim();
+                    }
+
+                    if (IsStrNoField(fieldName) && !string.IsNullOrEmpty(fieldValue))
+                    {
+                        customerData.StrNo = fieldValue.Trim();
                     }
 
                     if (fieldName?.Equals("Province", StringComparison.OrdinalIgnoreCase) == true && !string.IsNullOrEmpty(fieldValue))
@@ -2024,6 +1670,15 @@ namespace C2B_FBR_Connect.Services
                    fieldName.Equals("NTN/CNIC", StringComparison.OrdinalIgnoreCase);
         }
 
+        private bool IsStrNoField(String fieldName)
+        {
+            if (string.IsNullOrEmpty(fieldName)) return false;
+            return fieldName.Equals("STRN", StringComparison.OrdinalIgnoreCase) ||
+                   fieldName.Equals("STR NUMBER", StringComparison.OrdinalIgnoreCase) ||
+                   fieldName.Equals("STR NO", StringComparison.OrdinalIgnoreCase) ||
+                   fieldName.Equals("Sales Tax Registration Number", StringComparison.OrdinalIgnoreCase);
+        }
+
         private int GetProvinceCode(string provinceName)
         {
             if (string.IsNullOrWhiteSpace(provinceName)) return 0;
@@ -2100,7 +1755,6 @@ namespace C2B_FBR_Connect.Services
         {
             try
             {
-                ClearSessionData();
                 CloseSession();
                 CloseConnection();
             }
@@ -2128,16 +1782,6 @@ namespace C2B_FBR_Connect.Services
 
     #region Helper Classes
 
-    public class CachedData<T>
-    {
-        public T Data { get; set; }
-        public DateTime CachedAt { get; set; }
-        public TimeSpan ExpiresAfter { get; set; }
-
-        public bool IsExpired => DateTime.Now - CachedAt > ExpiresAfter;
-    }
-
-    // [KEEP ALL OTHER HELPER CLASSES FROM YOUR ORIGINAL CODE]
     public class CompanyInfo
     {
         public string Name { get; set; }
@@ -2153,11 +1797,14 @@ namespace C2B_FBR_Connect.Services
 
     public class CustomerData
     {
+        public string CustomerName { get; set; } = "";
         public string NTN { get; set; } = "";
+        public string StrNo { get; set; } = "";
         public string CustomerType { get; set; } = "Unregistered";
         public string Address { get; set; } = "";
         public string State { get; set; } = "";
         public string Phone { get; set; } = "";
+        public string Email { get; set; } = "";
     }
 
     public class ItemData

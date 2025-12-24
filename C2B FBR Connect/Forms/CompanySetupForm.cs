@@ -14,53 +14,91 @@ namespace C2B_FBR_Connect.Forms
 {
     public partial class CompanySetupForm : Form
     {
-        private TextBox txtCompanyName;
-        private TextBox txtFBRToken;
-        private TextBox txtSellerNTN;
-        private TextBox txtSellerAddress;
-        private ComboBox cboSellerProvince;
-        private TextBox txtSellerPhone;
-        private TextBox txtSellerEmail;
-        private Button btnSave;
-        private Button btnCancel;
-        private Label lblCompanyName;
-        private Label lblFBRToken;
-        private Label lblSellerNTN;
-        private Label lblSellerAddress;
-        private Label lblSellerProvince;
-        private Label lblSellerPhone;
-        private Label lblSellerEmail;
-        private Label lblInstructions;
-        private Label lblEnvironment;
-        private ComboBox cboEnvironment;
-        private GroupBox grpSellerInfo;
+        #region Controls
 
-        // Logo controls
+        // Header
+        private Panel pnlHeader;
+        private Label lblTitle;
+        private Label lblSubtitle;
+
+        // FBR Configuration
+        private GroupBox grpFBRConfig;
+        private Label lblCompanyName, lblFBRToken, lblEnvironment;
+        private TextBox txtCompanyName, txtFBRToken;
+        private ComboBox cboEnvironment;
+        private Panel pnlEnvironmentIndicator;
+
+        // Company Logo
         private GroupBox grpLogo;
         private PictureBox picLogo;
-        private Button btnSelectLogo;
-        private Button btnClearLogo;
+        private Button btnSelectLogo, btnClearLogo;
         private Label lblLogoInfo;
+
+        // Seller Information
+        private GroupBox grpSellerInfo;
+        private Label lblSellerNTN, lblStrNo, lblSellerProvince, lblSellerAddress, lblSellerPhone, lblSellerEmail;
+        private TextBox txtSellerNTN, txtStrNo, txtSellerAddress, txtSellerPhone, txtSellerEmail;
+        private ComboBox cboSellerProvince;
+        private Button btnRefreshFromQB;
+        private Label lblLastRefresh;
+
+        // Footer
+        private Panel pnlFooter;
+        private Button btnSave, btnCancel;
+        private Label lblRequiredNote;
+
+        #endregion
+
+        #region Fields
 
         private Dictionary<string, int> _provinceCodeMap = new Dictionary<string, int>();
         private FBRApiService _fbrApi;
+        private QuickBooksService _qbService;
         public Company Company { get; private set; }
 
-        public CompanySetupForm(string companyName, Company existingCompany = null)
+        // Colors
+        private readonly Color PrimaryColor = Color.FromArgb(45, 62, 80);
+        private readonly Color SecondaryColor = Color.FromArgb(52, 152, 219);
+        private readonly Color SuccessColor = Color.FromArgb(46, 204, 113);
+        private readonly Color WarningColor = Color.FromArgb(241, 196, 15);
+        private readonly Color DangerColor = Color.FromArgb(231, 76, 60);
+        private readonly Color LightBgColor = Color.FromArgb(248, 249, 250);
+        private readonly Color BorderColor = Color.FromArgb(222, 226, 230);
+        private readonly Color TextMutedColor = Color.FromArgb(108, 117, 125);
+
+        #endregion
+
+        #region Constructor
+
+        public CompanySetupForm(string companyName, Company existingCompany = null, QuickBooksService qbService = null)
         {
             InitializeComponent();
             SetupCustomUI();
 
             _fbrApi = new FBRApiService();
+            _qbService = qbService;
 
             txtCompanyName.Text = companyName;
-            txtCompanyName.ReadOnly = true;
 
             if (existingCompany != null)
             {
                 txtFBRToken.Text = existingCompany.FBRToken ?? "";
-                txtSellerNTN.Text = existingCompany.SellerNTN ?? "";
-                txtSellerAddress.Text = existingCompany.SellerAddress ?? "Fetched from QuickBooks";
+
+                // Set NTN with proper color (not placeholder)
+                if (!string.IsNullOrWhiteSpace(existingCompany.SellerNTN))
+                {
+                    txtSellerNTN.Text = existingCompany.SellerNTN;
+                    txtSellerNTN.ForeColor = Color.Black;
+                }
+
+                // Set STR with proper color (not placeholder)
+                if (!string.IsNullOrWhiteSpace(existingCompany.StrNo))
+                {
+                    txtStrNo.Text = existingCompany.StrNo;
+                    txtStrNo.ForeColor = Color.Black;
+                }
+
+                txtSellerAddress.Text = existingCompany.SellerAddress ?? "";
                 txtSellerPhone.Text = existingCompany.SellerPhone ?? "";
                 txtSellerEmail.Text = existingCompany.SellerEmail ?? "";
 
@@ -72,300 +110,511 @@ namespace C2B_FBR_Connect.Forms
                 }
 
                 Company = existingCompany;
-
-                // Load existing logo if available
                 LoadExistingLogo();
             }
             else
             {
                 Company = new Company { CompanyName = companyName };
-                txtSellerAddress.Text = "Will be fetched from QuickBooks";
             }
 
-            // Load provinces from API
             LoadProvincesAsync(existingCompany?.SellerProvince);
+            UpdateEnvironmentIndicator();
+            UpdateRefreshButtonState();
         }
+
+        #endregion
+
+        #region UI Setup
 
         private void SetupCustomUI()
         {
-            this.Text = "Company FBR Setup";
-            this.Size = new Size(500, 600);  
+            // Form Configuration
+            this.Text = "Company Setup";
+            this.Size = new Size(520, 785);
             this.StartPosition = FormStartPosition.CenterParent;
             this.FormBorderStyle = FormBorderStyle.FixedDialog;
             this.MaximizeBox = false;
             this.MinimizeBox = false;
+            this.BackColor = LightBgColor;
+            this.Font = new Font("Segoe UI", 9F);
 
-            lblInstructions = new Label
+            CreateHeader();
+            CreateFBRConfigGroup();
+            CreateLogoGroup();
+            CreateSellerInfoGroup();
+            CreateFooter();
+
+            // Add controls to form
+            this.Controls.Add(pnlFooter);
+            this.Controls.Add(grpSellerInfo);
+            this.Controls.Add(grpLogo);
+            this.Controls.Add(grpFBRConfig);
+            this.Controls.Add(pnlHeader);
+        }
+
+        private void CreateHeader()
+        {
+            pnlHeader = new Panel
             {
-                Text = "Configure FBR Digital Invoicing settings for this QuickBooks company:",
-                Location = new Point(12, 12),
-                Size = new Size(460, 30),
-                Font = new Font("Arial", 9F)
+                Dock = DockStyle.Top,
+                Height = 70,
+                BackColor = PrimaryColor,
+                Padding = new Padding(20, 15, 20, 15)
             };
 
-            lblCompanyName = new Label
+            lblTitle = new Label
             {
-                Text = "Company Name:",
-                Location = new Point(12, 55),
-                Size = new Size(120, 23)
+                Text = "⚙ Company Configuration",
+                Font = new Font("Segoe UI Semibold", 14F),
+                ForeColor = Color.White,
+                AutoSize = true,
+                Location = new Point(20, 12)
             };
 
-            txtCompanyName = new TextBox
+            lblSubtitle = new Label
             {
-                Location = new Point(140, 52),
-                Size = new Size(320, 23),
-                BackColor = Color.FromArgb(240, 240, 240)
+                Text = "Configure FBR Digital Invoicing settings",
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(200, 200, 200),
+                AutoSize = true,
+                Location = new Point(20, 40)
             };
 
-            lblFBRToken = new Label
+            pnlHeader.Controls.Add(lblTitle);
+            pnlHeader.Controls.Add(lblSubtitle);
+        }
+
+        private void CreateFBRConfigGroup()
+        {
+            grpFBRConfig = new GroupBox
             {
-                Text = "FBR Token:",
-                Location = new Point(12, 90),
-                Size = new Size(120, 23)
+                Text = "  FBR Configuration  ",
+                Location = new Point(15, 85),
+                Size = new Size(475, 145),
+                Font = new Font("Segoe UI Semibold", 9F),
+                ForeColor = PrimaryColor,
+                BackColor = Color.White,
+                Padding = new Padding(15, 10, 15, 10)
             };
 
-            txtFBRToken = new TextBox
+            // Company Name
+            lblCompanyName = CreateLabel("Company Name:", 15, 28);
+            txtCompanyName = CreateTextBox(130, 25, 325, true);
+            txtCompanyName.BackColor = Color.FromArgb(245, 245, 245);
+
+            // FBR Token
+            lblFBRToken = CreateLabel("FBR Token: *", 15, 60);
+            txtFBRToken = CreateTextBox(130, 57, 325);
+            txtFBRToken.UseSystemPasswordChar = false;
+
+            // Environment
+            lblEnvironment = CreateLabel("Environment: *", 15, 92);
+
+            cboEnvironment = new ComboBox
             {
-                Location = new Point(140, 87),
-                Size = new Size(320, 23),
-                UseSystemPasswordChar = false
+                Location = new Point(130, 89),
+                Size = new Size(200, 25),
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 9.5F),
+                FlatStyle = FlatStyle.Flat
+            };
+            cboEnvironment.Items.AddRange(new object[] { "Sandbox", "Production" });
+            cboEnvironment.SelectedIndex = 0;
+            cboEnvironment.SelectedIndexChanged += (s, e) => UpdateEnvironmentIndicator();
+
+            // Environment Indicator
+            pnlEnvironmentIndicator = new Panel
+            {
+                Location = new Point(340, 89),
+                Size = new Size(115, 25),
+                BackColor = WarningColor
             };
 
-            // ─── Company Logo Group ─────────────────────────────────────────────
+            var lblEnvIndicator = new Label
+            {
+                Name = "lblEnvIndicator",
+                Text = "⚠ SANDBOX",
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 8F, FontStyle.Bold),
+                ForeColor = Color.White,
+                TextAlign = ContentAlignment.MiddleCenter
+            };
+            pnlEnvironmentIndicator.Controls.Add(lblEnvIndicator);
+
+            grpFBRConfig.Controls.AddRange(new Control[] {
+                lblCompanyName, txtCompanyName,
+                lblFBRToken, txtFBRToken,
+                lblEnvironment, cboEnvironment, pnlEnvironmentIndicator
+            });
+        }
+
+        private void CreateLogoGroup()
+        {
             grpLogo = new GroupBox
             {
-                Text = "Company Logo",
-                Location = new Point(12, 125),
-                Size = new Size(460, 120),
-                Font = new Font("Arial", 9F, FontStyle.Bold)
+                Text = "  Company Logo  ",
+                Location = new Point(15, 240),
+                Size = new Size(475, 110),
+                Font = new Font("Segoe UI Semibold", 9F),
+                ForeColor = PrimaryColor,
+                BackColor = Color.White
             };
 
             picLogo = new PictureBox
             {
-                Location = new Point(12, 25),
-                Size = new Size(150, 80),
+                Location = new Point(15, 25),
+                Size = new Size(120, 70),
                 BorderStyle = BorderStyle.FixedSingle,
                 SizeMode = PictureBoxSizeMode.Zoom,
-                BackColor = Color.White
+                BackColor = LightBgColor
             };
 
-            btnSelectLogo = new Button
-            {
-                Text = "Select Logo",
-                Location = new Point(175, 30),
-                Size = new Size(100, 32),
-                BackColor = Color.FromArgb(33, 150, 243),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F),
-                Cursor = Cursors.Hand
-            };
-            btnSelectLogo.FlatAppearance.BorderSize = 0;
+            btnSelectLogo = CreateButton("📁 Select Logo", 150, 30, 110, 32, SecondaryColor);
             btnSelectLogo.Click += BtnSelectLogo_Click;
 
-            btnClearLogo = new Button
-            {
-                Text = "Clear Logo",
-                Location = new Point(285, 30),
-                Size = new Size(100, 32),
-                BackColor = Color.FromArgb(244, 67, 54),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F),
-                Enabled = false,
-                Cursor = Cursors.Hand
-            };
-            btnClearLogo.FlatAppearance.BorderSize = 0;
+            btnClearLogo = CreateButton("🗑 Clear", 270, 30, 85, 32, DangerColor);
+            btnClearLogo.Enabled = false;
             btnClearLogo.Click += BtnClearLogo_Click;
 
             lblLogoInfo = new Label
             {
-                Text = "No logo selected",
-                Location = new Point(175, 70),
-                Size = new Size(270, 35),
-                Font = new Font("Arial", 8F, FontStyle.Italic),
-                ForeColor = Color.Gray
+                Text = "No logo selected\nRecommended: 500x500px or smaller",
+                Location = new Point(150, 68),
+                Size = new Size(310, 35),
+                Font = new Font("Segoe UI", 8F),
+                ForeColor = TextMutedColor
             };
 
-            lblEnvironment = new Label
-            {
-                Text = "Environment:*",
-                Location = new Point(12, 125),
-                Size = new Size(120, 23)
-            };
+            grpLogo.Controls.AddRange(new Control[] { picLogo, btnSelectLogo, btnClearLogo, lblLogoInfo });
+        }
 
-            cboEnvironment = new ComboBox
-            {
-                Location = new Point(140, 122),
-                Size = new Size(320, 23),
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Arial", 9F)
-            };
-            cboEnvironment.Items.AddRange(new object[] { "Sandbox", "Production" });
-            cboEnvironment.SelectedIndex = 0; // Default to Production
-
-            this.Controls.Add(lblEnvironment);
-            this.Controls.Add(cboEnvironment);
-            grpLogo.Controls.Add(picLogo);
-            grpLogo.Controls.Add(btnSelectLogo);
-            grpLogo.Controls.Add(btnClearLogo);
-            grpLogo.Controls.Add(lblLogoInfo);
-
-            // ─── Seller Info Group ─────────────────────────────────────────────
+        private void CreateSellerInfoGroup()
+        {
             grpSellerInfo = new GroupBox
             {
-                Text = "Seller Information",
-                Location = new Point(12, 255),  // Adjusted position
-                Size = new Size(460, 250),
-                Font = new Font("Arial", 9F, FontStyle.Bold)
+                Text = "  Seller Information  ",
+                Location = new Point(15, 360),
+                Size = new Size(475, 310),
+                Font = new Font("Segoe UI Semibold", 9F),
+                ForeColor = PrimaryColor,
+                BackColor = Color.White
             };
 
-            lblSellerNTN = new Label
-            {
-                Text = "Seller NTN/CNIC:*",
-                Location = new Point(12, 30),
-                Size = new Size(120, 23)
-            };
+            int labelX = 15;
+            int inputX = 130;
+            int inputWidth = 325;
+            int rowHeight = 35;
+            int startY = 28;
 
-            txtSellerNTN = new TextBox
-            {
-                Location = new Point(128, 27),
-                Size = new Size(315, 23),
-                Font = new Font("Arial", 9F),
-                PlaceholderText = "Enter your NTN or CNIC number"
-            };
+            // Seller NTN
+            lblSellerNTN = CreateLabel("NTN / CNIC: *", labelX, startY);
+            txtSellerNTN = CreateTextBox(inputX, startY - 3, inputWidth);
+            AddPlaceholder(txtSellerNTN, "Enter your NTN or CNIC number");
 
-            lblSellerAddress = new Label
-            {
-                Text = "Seller Address:",
-                Location = new Point(12, 65),
-                Size = new Size(120, 23)
-            };
+            // STR No
+            lblStrNo = CreateLabel("STR No:", labelX, startY + rowHeight);
+            txtStrNo = CreateTextBox(inputX, startY + rowHeight - 3, inputWidth);
+            AddPlaceholder(txtStrNo, "Enter STR number");
 
-            txtSellerAddress = new TextBox
-            {
-                Location = new Point(128, 62),
-                Size = new Size(315, 50),
-                Multiline = true,
-                ScrollBars = ScrollBars.Vertical,
-                Font = new Font("Arial", 9F),
-                ReadOnly = true,
-                BackColor = Color.FromArgb(240, 240, 240),
-                ForeColor = Color.DarkGray
-            };
-
-            lblSellerProvince = new Label
-            {
-                Text = "Seller Province:*",
-                Location = new Point(12, 120),
-                Size = new Size(120, 23)
-            };
-
+            // Seller Province
+            lblSellerProvince = CreateLabel("Province: *", labelX, startY + rowHeight * 2);
             cboSellerProvince = new ComboBox
             {
-                Location = new Point(128, 117),
-                Size = new Size(315, 23),
-                Font = new Font("Arial", 9F),
+                Location = new Point(inputX, startY + rowHeight * 2 - 3),
+                Size = new Size(inputWidth, 25),
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                BackColor = Color.White,
+                Font = new Font("Segoe UI", 9.5F),
+                FlatStyle = FlatStyle.Flat
+            };
+
+            // Seller Address
+            lblSellerAddress = CreateLabel("Address:", labelX, startY + rowHeight * 3);
+            txtSellerAddress = new TextBox
+            {
+                Location = new Point(inputX, startY + rowHeight * 3 - 3),
+                Size = new Size(inputWidth, 50),
+                Font = new Font("Segoe UI", 9.5F),
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                BorderStyle = BorderStyle.FixedSingle,
                 ForeColor = Color.Black
             };
 
-            lblSellerPhone = new Label
+            // Seller Phone
+            lblSellerPhone = CreateLabel("Phone:", labelX, startY + rowHeight * 3 + 55);
+            txtSellerPhone = CreateTextBox(inputX, startY + rowHeight * 3 + 52, inputWidth);
+
+            // Seller Email
+            lblSellerEmail = CreateLabel("Email:", labelX, startY + rowHeight * 3 + 90);
+            txtSellerEmail = CreateTextBox(inputX, startY + rowHeight * 3 + 87, inputWidth);
+
+            // Refresh from QuickBooks button
+            btnRefreshFromQB = CreateButton("🔄 Refresh from QuickBooks", labelX, 253, 200, 32, SecondaryColor);
+            btnRefreshFromQB.Click += BtnRefreshFromQB_Click;
+
+            // Last refresh label
+            lblLastRefresh = new Label
             {
-                Text = "Seller Phone:",
-                Location = new Point(12, 155),
-                Size = new Size(120, 23)
+                Text = "",
+                Location = new Point(220, 260),
+                Size = new Size(240, 20),
+                Font = new Font("Segoe UI", 8F, FontStyle.Italic),
+                ForeColor = TextMutedColor,
+                TextAlign = ContentAlignment.MiddleLeft
             };
 
-            txtSellerPhone = new TextBox
+            // Help text
+            var lblHelp = new Label
             {
-                Location = new Point(128, 152),
-                Size = new Size(315, 23),
-                Font = new Font("Arial", 9F),
-                ReadOnly = true,
-                BackColor = Color.FromArgb(240, 240, 240),
-                ForeColor = Color.DarkGray
+                Text = "ℹ Click 'Refresh' to load Address, Phone, and Email from QuickBooks",
+                Location = new Point(labelX, 288),
+                Size = new Size(440, 20),
+                Font = new Font("Segoe UI", 8F, FontStyle.Italic),
+                ForeColor = SecondaryColor
             };
 
-            lblSellerEmail = new Label
+            grpSellerInfo.Controls.AddRange(new Control[] {
+                lblSellerNTN, txtSellerNTN,
+                lblStrNo, txtStrNo,
+                lblSellerProvince, cboSellerProvince,
+                lblSellerAddress, txtSellerAddress,
+                lblSellerPhone, txtSellerPhone,
+                lblSellerEmail, txtSellerEmail,
+                btnRefreshFromQB, lblLastRefresh,
+                lblHelp
+            });
+        }
+
+        private void CreateFooter()
+        {
+            pnlFooter = new Panel
             {
-                Text = "Seller Email:",
-                Location = new Point(12, 185),
-                Size = new Size(120, 23)
+                Dock = DockStyle.Bottom,
+                Height = 65,
+                BackColor = Color.White,
+                Padding = new Padding(15, 12, 15, 12)
             };
 
-            txtSellerEmail = new TextBox
+            // Top border
+            pnlFooter.Paint += (s, e) =>
             {
-                Location = new Point(128, 182),
-                Size = new Size(315, 23),
-                Font = new Font("Arial", 9F),
-                ReadOnly = true,
-                BackColor = Color.FromArgb(240, 240, 240),
-                ForeColor = Color.DarkGray
+                using (var pen = new Pen(BorderColor, 1))
+                {
+                    e.Graphics.DrawLine(pen, 0, 0, pnlFooter.Width, 0);
+                }
             };
 
-            Label lblHelp = new Label
+            lblRequiredNote = new Label
             {
-                Text = "* Required fields. Address, Phone, and Email are auto-fetched from QuickBooks.",
-                Location = new Point(12, 215),
-                Size = new Size(430, 25),
-                Font = new Font("Arial", 8F, FontStyle.Italic),
-                ForeColor = Color.DarkBlue
+                Text = "* Required fields",
+                Location = new Point(15, 22),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 8.5F),
+                ForeColor = TextMutedColor
             };
 
-            grpSellerInfo.Controls.Add(lblSellerNTN);
-            grpSellerInfo.Controls.Add(txtSellerNTN);
-            grpSellerInfo.Controls.Add(lblSellerAddress);
-            grpSellerInfo.Controls.Add(txtSellerAddress);
-            grpSellerInfo.Controls.Add(lblSellerProvince);
-            grpSellerInfo.Controls.Add(cboSellerProvince);
-            grpSellerInfo.Controls.Add(lblSellerPhone);
-            grpSellerInfo.Controls.Add(txtSellerPhone);
-            grpSellerInfo.Controls.Add(lblSellerEmail);
-            grpSellerInfo.Controls.Add(txtSellerEmail);
-            grpSellerInfo.Controls.Add(lblHelp);
+            btnCancel = CreateButton("Cancel", 290, 12, 95, 40, Color.FromArgb(108, 117, 125));
+            btnCancel.DialogResult = DialogResult.Cancel;
 
-            // ─── Buttons ─────────────────────────────────────────────
-            btnSave = new Button
-            {
-                Text = "Save",
-                Location = new Point(285, 515),  // Adjusted position
-                Size = new Size(85, 35),
-                DialogResult = DialogResult.OK,
-                BackColor = Color.FromArgb(46, 125, 50),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F, FontStyle.Bold),
-                Cursor = Cursors.Hand
-            };
-            btnSave.FlatAppearance.BorderSize = 0;
+            btnSave = CreateButton("💾 Save", 395, 12, 95, 40, SuccessColor);
             btnSave.Click += BtnSave_Click;
 
-            btnCancel = new Button
+            pnlFooter.Controls.AddRange(new Control[] { lblRequiredNote, btnCancel, btnSave });
+        }
+
+        #endregion
+
+        #region Helper Methods
+
+        private Label CreateLabel(string text, int x, int y)
+        {
+            return new Label
             {
-                Text = "Cancel",
-                Location = new Point(375, 515),  // Adjusted position
-                Size = new Size(85, 35),
-                DialogResult = DialogResult.Cancel,
-                BackColor = Color.FromArgb(211, 47, 47),
+                Text = text,
+                Location = new Point(x, y),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F),
+                ForeColor = Color.FromArgb(73, 80, 87)
+            };
+        }
+
+        private TextBox CreateTextBox(int x, int y, int width, bool readOnly = false)
+        {
+            var textBox = new TextBox
+            {
+                Location = new Point(x, y),
+                Size = new Size(width, 25),
+                Font = new Font("Segoe UI", 9.5F),
+                BorderStyle = BorderStyle.FixedSingle,
+                ReadOnly = readOnly,
+                ForeColor = Color.Black
+            };
+
+            if (readOnly)
+            {
+                textBox.BackColor = Color.FromArgb(245, 245, 245);
+            }
+
+            return textBox;
+        }
+
+        private Button CreateButton(string text, int x, int y, int width, int height, Color backColor)
+        {
+            var button = new Button
+            {
+                Text = text,
+                Location = new Point(x, y),
+                Size = new Size(width, height),
+                BackColor = backColor,
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Font = new Font("Arial", 9F, FontStyle.Bold),
+                Font = new Font("Segoe UI", 9F),
                 Cursor = Cursors.Hand
             };
-            btnCancel.FlatAppearance.BorderSize = 0;
 
-            this.Controls.Add(lblInstructions);
-            this.Controls.Add(lblCompanyName);
-            this.Controls.Add(txtCompanyName);
-            this.Controls.Add(lblFBRToken);
-            this.Controls.Add(txtFBRToken);
-            this.Controls.Add(grpLogo);
-            this.Controls.Add(grpSellerInfo);
-            this.Controls.Add(btnSave);
-            this.Controls.Add(btnCancel);
+            button.FlatAppearance.BorderSize = 0;
+            button.FlatAppearance.MouseOverBackColor = ControlPaint.Dark(backColor, 0.1f);
+            button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
+
+            return button;
         }
+
+        private void AddPlaceholder(TextBox textBox, string placeholder)
+        {
+            textBox.Text = placeholder;
+            textBox.ForeColor = Color.Gray;
+
+            textBox.GotFocus += (s, e) =>
+            {
+                if (textBox.Text == placeholder)
+                {
+                    textBox.Text = "";
+                    textBox.ForeColor = Color.Black;
+                }
+            };
+
+            textBox.LostFocus += (s, e) =>
+            {
+                if (string.IsNullOrWhiteSpace(textBox.Text))
+                {
+                    textBox.Text = placeholder;
+                    textBox.ForeColor = Color.Gray;
+                }
+            };
+        }
+
+        private void UpdateEnvironmentIndicator()
+        {
+            var env = cboEnvironment.SelectedItem?.ToString() ?? "Sandbox";
+            var lblIndicator = pnlEnvironmentIndicator.Controls.Find("lblEnvIndicator", false).FirstOrDefault() as Label;
+
+            if (env == "Production")
+            {
+                pnlEnvironmentIndicator.BackColor = SuccessColor;
+                if (lblIndicator != null) lblIndicator.Text = "✓ PRODUCTION";
+            }
+            else
+            {
+                pnlEnvironmentIndicator.BackColor = WarningColor;
+                if (lblIndicator != null) lblIndicator.Text = "⚠ SANDBOX";
+            }
+        }
+
+        private void UpdateRefreshButtonState()
+        {
+            btnRefreshFromQB.Enabled = _qbService != null;
+
+            if (_qbService == null)
+            {
+                btnRefreshFromQB.BackColor = Color.FromArgb(180, 180, 180);
+                lblLastRefresh.Text = "QuickBooks service not available";
+            }
+        }
+
+        #endregion
+
+        #region QuickBooks Refresh
+
+        private void BtnRefreshFromQB_Click(object sender, EventArgs e)
+        {
+            if (_qbService == null)
+            {
+                MessageBox.Show(
+                    "QuickBooks service is not available.",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            // Disable button and show loading state
+            btnRefreshFromQB.Enabled = false;
+            var originalText = btnRefreshFromQB.Text;
+            btnRefreshFromQB.Text = "⏳ Refreshing...";
+            Application.DoEvents();
+
+            try
+            {
+                // Get fresh company info from QuickBooks (forces re-fetch)
+                var companyInfo = _qbService.RefreshCompanyInfo();
+
+                if (companyInfo != null)
+                {
+                    // Update form fields only
+                    if (!string.IsNullOrWhiteSpace(companyInfo.Name))
+                    {
+                        txtCompanyName.Text = companyInfo.Name;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(companyInfo.Address))
+                    {
+                        txtSellerAddress.Text = companyInfo.Address;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(companyInfo.Phone))
+                    {
+                        txtSellerPhone.Text = companyInfo.Phone;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(companyInfo.Email))
+                    {
+                        txtSellerEmail.Text = companyInfo.Email;
+                    }
+
+                    lblLastRefresh.Text = $"✓ Refreshed: {DateTime.Now:HH:mm:ss}";
+                    lblLastRefresh.ForeColor = SuccessColor;
+                }
+                else
+                {
+                    lblLastRefresh.Text = "✗ No data returned";
+                    lblLastRefresh.ForeColor = DangerColor;
+
+                    MessageBox.Show(
+                        "No company data returned from QuickBooks.",
+                        "Refresh Failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                lblLastRefresh.Text = "✗ Refresh failed";
+                lblLastRefresh.ForeColor = DangerColor;
+
+                MessageBox.Show(
+                    $"Failed to refresh data:\n{ex.Message}",
+                    "Error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            finally
+            {
+                btnRefreshFromQB.Text = originalText;
+                btnRefreshFromQB.Enabled = true;
+            }
+        }
+
+        #endregion
 
         #region Logo Management
 
@@ -381,7 +630,6 @@ namespace C2B_FBR_Connect.Forms
                 {
                     try
                     {
-                        // Validate image file
                         if (!ImageHelper.IsValidImageFile(openFileDialog.FileName))
                         {
                             MessageBox.Show("The selected file is not a valid image format.",
@@ -391,21 +639,16 @@ namespace C2B_FBR_Connect.Forms
                             return;
                         }
 
-                        // Get image dimensions and file size for info
                         var dimensions = ImageHelper.GetImageDimensions(openFileDialog.FileName);
                         var fileSize = ImageHelper.GetFileSizeFormatted(openFileDialog.FileName);
 
-                        // Load, resize, and convert to bytes
                         Company.LogoImage = ImageHelper.LoadAndResizeImage(openFileDialog.FileName, 500, 500);
 
-                        // Display in PictureBox
                         DisplayLogo(Company.LogoImage);
 
-                        // Update info label
-                        lblLogoInfo.Text = $"Logo loaded successfully\nOriginal: {dimensions.width}x{dimensions.height} ({fileSize})";
-                        lblLogoInfo.ForeColor = Color.Green;
+                        lblLogoInfo.Text = $"✓ Logo loaded successfully\nOriginal: {dimensions.width}x{dimensions.height} ({fileSize})";
+                        lblLogoInfo.ForeColor = SuccessColor;
 
-                        // Enable clear button
                         btnClearLogo.Enabled = true;
                     }
                     catch (Exception ex)
@@ -433,11 +676,6 @@ namespace C2B_FBR_Connect.Forms
             {
                 ClearLogoDisplay();
                 Company.LogoImage = null;
-
-                MessageBox.Show("Logo removed successfully.",
-                    "Logo Cleared",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
             }
         }
 
@@ -449,20 +687,19 @@ namespace C2B_FBR_Connect.Forms
                 {
                     DisplayLogo(Company.LogoImage);
 
-                    // Calculate approximate size
                     double sizeKB = Company.LogoImage.Length / 1024.0;
                     string sizeText = sizeKB < 1024
                         ? $"{sizeKB:0.##} KB"
                         : $"{sizeKB / 1024:0.##} MB";
 
-                    lblLogoInfo.Text = $"Current logo loaded\nSize: {sizeText}";
-                    lblLogoInfo.ForeColor = Color.Green;
+                    lblLogoInfo.Text = $"✓ Current logo loaded\nSize: {sizeText}";
+                    lblLogoInfo.ForeColor = SuccessColor;
                     btnClearLogo.Enabled = true;
                 }
                 catch (Exception ex)
                 {
-                    lblLogoInfo.Text = "Error loading saved logo";
-                    lblLogoInfo.ForeColor = Color.Red;
+                    lblLogoInfo.Text = "✗ Error loading saved logo";
+                    lblLogoInfo.ForeColor = DangerColor;
                     btnClearLogo.Enabled = false;
 
                     System.Diagnostics.Debug.WriteLine($"Error loading logo: {ex.Message}");
@@ -476,14 +713,12 @@ namespace C2B_FBR_Connect.Forms
 
         private void DisplayLogo(byte[] logoBytes)
         {
-            // Dispose previous image to free memory
             if (picLogo.Image != null)
             {
                 picLogo.Image.Dispose();
                 picLogo.Image = null;
             }
 
-            // Load new image
             picLogo.Image = ImageHelper.ByteArrayToImage(logoBytes);
         }
 
@@ -495,8 +730,8 @@ namespace C2B_FBR_Connect.Forms
                 picLogo.Image = null;
             }
 
-            lblLogoInfo.Text = "No logo selected";
-            lblLogoInfo.ForeColor = Color.Gray;
+            lblLogoInfo.Text = "No logo selected\nRecommended: 500x500px or smaller";
+            lblLogoInfo.ForeColor = TextMutedColor;
             btnClearLogo.Enabled = false;
         }
 
@@ -513,10 +748,8 @@ namespace C2B_FBR_Connect.Forms
 
             try
             {
-                // Get token if available
                 string token = !string.IsNullOrWhiteSpace(txtFBRToken.Text) ? txtFBRToken.Text : null;
 
-                // Fetch provinces from FBR API using FBRApiService
                 var provinces = await _fbrApi.FetchProvincesAsync(token);
 
                 cboSellerProvince.Items.Clear();
@@ -530,7 +763,6 @@ namespace C2B_FBR_Connect.Forms
                         _provinceCodeMap[province.StateProvinceDesc] = province.StateProvinceCode;
                     }
 
-                    // Select the existing province if available
                     if (!string.IsNullOrWhiteSpace(selectedProvince))
                     {
                         int index = cboSellerProvince.FindStringExact(selectedProvince);
@@ -600,62 +832,77 @@ namespace C2B_FBR_Connect.Forms
             // Validate FBR Token
             if (string.IsNullOrWhiteSpace(txtFBRToken.Text))
             {
-                MessageBox.Show("Please enter FBR token.", "Validation Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtFBRToken.Focus();
-                this.DialogResult = DialogResult.None;
+                ShowValidationError("Please enter FBR Token.", txtFBRToken);
                 return;
             }
 
             // Validate Seller NTN
-            if (string.IsNullOrWhiteSpace(txtSellerNTN.Text))
+            string ntnText = txtSellerNTN.Text;
+            if (ntnText == "Enter your NTN or CNIC number") ntnText = "";
+
+            if (string.IsNullOrWhiteSpace(ntnText))
             {
-                MessageBox.Show("Please enter Seller NTN/CNIC. This is required for FBR invoicing.",
-                    "Validation Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                txtSellerNTN.Focus();
-                this.DialogResult = DialogResult.None;
+                ShowValidationError("Please enter Seller NTN/CNIC. This is required for FBR invoicing.", txtSellerNTN);
                 return;
             }
 
+            // Get SRO No (handle placeholder)
+            string StrNoText = txtStrNo.Text;
+            if (StrNoText == "Enter STR number (if applicable)") StrNoText = "";
+
+            // Validate Environment
             if (cboEnvironment.SelectedItem == null)
             {
-                MessageBox.Show("Please select an environment (Production or Sandbox).",
-                    "Validation Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                cboEnvironment.Focus();
-                this.DialogResult = DialogResult.None;
+                ShowValidationError("Please select an environment (Production or Sandbox).", cboEnvironment);
                 return;
             }
 
             // Validate Seller Province
-            if (cboSellerProvince.SelectedItem == null)
+            if (cboSellerProvince.SelectedItem == null ||
+                cboSellerProvince.SelectedItem.ToString() == "Loading provinces...")
             {
-                MessageBox.Show("Please select Seller Province. This is required for FBR invoicing.",
-                    "Validation Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                cboSellerProvince.Focus();
-                this.DialogResult = DialogResult.None;
+                ShowValidationError("Please select Seller Province. This is required for FBR invoicing.", cboSellerProvince);
                 return;
+            }
+
+            // Confirm Production environment
+            if (cboEnvironment.SelectedItem.ToString() == "Production")
+            {
+                var result = MessageBox.Show(
+                    "You have selected PRODUCTION environment.\n\n" +
+                    "All invoices will be submitted to FBR's live system.\n\n" +
+                    "Are you sure you want to continue?",
+                    "Confirm Production Environment",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Warning);
+
+                if (result != DialogResult.Yes)
+                {
+                    cboEnvironment.Focus();
+                    return;
+                }
             }
 
             // Save information to Company object
             Company.CompanyName = txtCompanyName.Text.Trim();
             Company.Environment = cboEnvironment.SelectedItem.ToString();
             Company.FBRToken = txtFBRToken.Text.Trim();
-            Company.SellerNTN = txtSellerNTN.Text.Trim();
+            Company.SellerNTN = ntnText.Trim();
+            Company.StrNo = !string.IsNullOrWhiteSpace(StrNoText) ? StrNoText.Trim() : null;
             Company.SellerProvince = cboSellerProvince.SelectedItem.ToString();
             Company.SellerPhone = txtSellerPhone.Text?.Trim();
             Company.SellerEmail = txtSellerEmail.Text?.Trim();
-            Company.SellerAddress = txtSellerAddress.Text.Trim();
-
-            // Logo is already set in Company.LogoImage via BtnSelectLogo_Click
-            // or cleared via BtnClearLogo_Click
-
+            Company.SellerAddress = txtSellerAddress.Text?.Trim();
             Company.ModifiedDate = DateTime.Now;
 
-            // The Company object is now updated and will be returned to the caller
-            // The caller MUST save it using DatabaseService.SaveCompany(Company)
+            this.DialogResult = DialogResult.OK;
+            this.Close();
+        }
+
+        private void ShowValidationError(string message, Control focusControl)
+        {
+            MessageBox.Show(message, "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            focusControl?.Focus();
         }
 
         #endregion
@@ -666,7 +913,6 @@ namespace C2B_FBR_Connect.Forms
         {
             if (disposing)
             {
-                // Dispose image to free memory
                 if (picLogo?.Image != null)
                 {
                     picLogo.Image.Dispose();

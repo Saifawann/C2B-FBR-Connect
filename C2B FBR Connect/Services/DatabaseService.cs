@@ -52,6 +52,7 @@ namespace C2B_FBR_Connect.Services
                         CompanyName TEXT UNIQUE NOT NULL,
                         FBRToken TEXT NOT NULL,
                         SellerNTN TEXT,
+                        StrNo TEXT,
                         SellerAddress TEXT,
                         SellerProvince TEXT,
                         SellerPhone TEXT,
@@ -62,19 +63,30 @@ namespace C2B_FBR_Connect.Services
                         ModifiedDate DATETIME
                     );";
 
-                // ✅ Changed TransactionType to InvoiceType
+                string createCustomersTable = @"
+                    CREATE TABLE IF NOT EXISTS Customers (
+                        Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        CompanyName TEXT NOT NULL,
+                        QuickBooksCustomerId TEXT NOT NULL,
+                        CustomerName TEXT NOT NULL,
+                        CustomerNTN TEXT,
+                        CustomerStrNo TEXT,
+                        CustomerAddress TEXT,
+                        CustomerPhone TEXT,
+                        CustomerEmail TEXT,
+                        CustomerType TEXT DEFAULT 'Unregistered',
+                        CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        ModifiedDate DATETIME,
+                        UNIQUE(CompanyName, QuickBooksCustomerId)
+                    );";
+
                 string createInvoicesTable = @"
                     CREATE TABLE IF NOT EXISTS Invoices (
                         Id INTEGER PRIMARY KEY AUTOINCREMENT,
                         CompanyName TEXT NOT NULL,
                         QuickBooksInvoiceId TEXT NOT NULL,
                         InvoiceNumber TEXT NOT NULL,
-                        CustomerName TEXT NOT NULL,
-                        CustomerNTN TEXT,
-                        CustomerAddress TEXT,
-                        CustomerPhone TEXT,
-                        CustomerEmail TEXT,
-                        CustomerType TEXT DEFAULT 'Unregistered',
+                        CustomerId INTEGER NOT NULL,
                         Amount DECIMAL NOT NULL,
                         TotalAmount DECIMAL DEFAULT 0,
                         TaxAmount DECIMAL DEFAULT 0,
@@ -82,14 +94,15 @@ namespace C2B_FBR_Connect.Services
                         InvoiceDate DATETIME,
                         PaymentMode TEXT DEFAULT 'Cash',
                         Status TEXT DEFAULT 'Pending',
+                        InvoiceType TEXT DEFAULT 'Invoice',
                         FBR_IRN TEXT,
                         FBR_QRCode TEXT,
                         UploadDate DATETIME,
+                        ErrorMessage TEXT,
                         CreatedDate DATETIME DEFAULT CURRENT_TIMESTAMP,
                         ModifiedDate DATETIME,
-                        ErrorMessage TEXT,
-                        InvoiceType TEXT DEFAULT 'Invoice',
-                        UNIQUE(CompanyName, QuickBooksInvoiceId)
+                        UNIQUE(CompanyName, QuickBooksInvoiceId),
+                        FOREIGN KEY (CustomerId) REFERENCES Customers(Id)
                     );";
 
                 string createInvoiceItemsTable = @"
@@ -125,25 +138,43 @@ namespace C2B_FBR_Connect.Services
                         TransactionTypeId INTEGER NOT NULL UNIQUE,
                         TransactionDesc TEXT NOT NULL,
                         LastUpdated TEXT NOT NULL
-                    );
-                    CREATE INDEX IF NOT EXISTS idx_transaction_type_id ON TransactionTypes(TransactionTypeId);
-                    CREATE INDEX IF NOT EXISTS idx_invoiceitems_invoiceid ON InvoiceItems(InvoiceId);
-                ";
+                    );";
 
                 ExecuteNonQuery(conn, createCompaniesTable);
+                ExecuteNonQuery(conn, createCustomersTable);
                 ExecuteNonQuery(conn, createInvoicesTable);
                 ExecuteNonQuery(conn, createInvoiceItemsTable);
                 ExecuteNonQuery(conn, createTransactionTypesTable);
 
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_customers_qbid ON Customers(QuickBooksCustomerId);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_customers_company ON Customers(CompanyName);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_customers_name ON Customers(CompanyName, CustomerName);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_invoices_customerid ON Invoices(CustomerId);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_invoices_qbid ON Invoices(QuickBooksInvoiceId);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_transaction_type_id ON TransactionTypes(TransactionTypeId);");
+                ExecuteNonQuerySafe(conn, "CREATE INDEX IF NOT EXISTS idx_invoiceitems_invoiceid ON InvoiceItems(InvoiceId);");
+
                 Console.WriteLine("✅ Database initialized successfully");
             }
-            MigrateDatabase();
         }
 
         private void ExecuteNonQuery(SQLiteConnection conn, string sql)
         {
             using var cmd = new SQLiteCommand(sql, conn);
             cmd.ExecuteNonQuery();
+        }
+
+        private void ExecuteNonQuerySafe(SQLiteConnection conn, string sql)
+        {
+            try
+            {
+                using var cmd = new SQLiteCommand(sql, conn);
+                cmd.ExecuteNonQuery();
+            }
+            catch (SQLiteException ex) when (ex.Message.Contains("already exists"))
+            {
+                // Index already exists, ignore
+            }
         }
 
         private T ExecuteWithRetry<T>(Func<T> operation, string operationName)
@@ -197,12 +228,13 @@ namespace C2B_FBR_Connect.Services
                         CompanyName = reader["CompanyName"].ToString(),
                         FBRToken = reader["FBRToken"].ToString(),
                         SellerNTN = reader["SellerNTN"]?.ToString(),
+                        StrNo = reader["StrNo"] != DBNull.Value ? reader["StrNo"].ToString() : null,
                         SellerAddress = reader["SellerAddress"]?.ToString(),
                         SellerProvince = reader["SellerProvince"]?.ToString(),
                         SellerPhone = reader["SellerPhone"]?.ToString(),
                         SellerEmail = reader["SellerEmail"]?.ToString(),
                         LogoImage = reader["LogoImage"] != DBNull.Value ? (byte[])reader["LogoImage"] : null,
-                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox", // ✅ ADD THIS
+                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox",
                         CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
                         ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null
                     };
@@ -232,11 +264,12 @@ namespace C2B_FBR_Connect.Services
                         CompanyName = reader["CompanyName"].ToString(),
                         FBRToken = reader["FBRToken"].ToString(),
                         SellerNTN = reader["SellerNTN"]?.ToString(),
+                        StrNo = reader["StrNo"] != DBNull.Value ? reader["StrNo"].ToString() : null,
                         SellerAddress = reader["SellerAddress"]?.ToString(),
                         SellerProvince = reader["SellerProvince"]?.ToString(),
                         SellerPhone = reader["SellerPhone"]?.ToString(),
                         SellerEmail = reader["SellerEmail"]?.ToString(),
-                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox", // ✅ ADD THIS
+                        Environment = reader["Environment"] != DBNull.Value ? reader["Environment"].ToString() : "Sandbox",
                         CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
                         ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null
                     });
@@ -265,6 +298,7 @@ namespace C2B_FBR_Connect.Services
                         UPDATE Companies 
                         SET FBRToken = @token, 
                             SellerNTN = @ntn,
+                            StrNo = @StrNo,
                             SellerAddress = @address,
                             SellerProvince = @province,
                             SellerPhone = @phone,
@@ -279,8 +313,8 @@ namespace C2B_FBR_Connect.Services
                 else
                 {
                     cmd = new SQLiteCommand(@"
-                        INSERT INTO Companies (CompanyName, FBRToken, SellerNTN, SellerAddress, SellerProvince, SellerPhone, SellerEmail, LogoImage, Environment, CreatedDate)
-                        VALUES (@name, @token, @ntn, @address, @province, @phone, @email, @logoImage, @environment, @created)", conn);
+                        INSERT INTO Companies (CompanyName, FBRToken, SellerNTN, StrNo, SellerAddress, SellerProvince, SellerPhone, SellerEmail, LogoImage, Environment, CreatedDate)
+                        VALUES (@name, @token, @ntn, @StrNo, @address, @province, @phone, @email, @logoImage, @environment, @created)", conn);
 
                     cmd.Parameters.AddWithValue("@created", DateTime.Now);
                 }
@@ -289,6 +323,7 @@ namespace C2B_FBR_Connect.Services
                 cmd.Parameters.AddWithValue("@token", company.FBRToken);
                 cmd.Parameters.AddWithValue("@environment", company.Environment ?? "Sandbox");
                 cmd.Parameters.AddWithValue("@ntn", company.SellerNTN ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@StrNo", company.StrNo ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@address", company.SellerAddress ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@province", company.SellerProvince ?? (object)DBNull.Value);
                 cmd.Parameters.AddWithValue("@phone", company.SellerPhone ?? (object)DBNull.Value);
@@ -315,7 +350,219 @@ namespace C2B_FBR_Connect.Services
             }, "DeleteCompany");
         }
 
+        #endregion
 
+        #region Customers CRUD
+
+        public Customer GetCustomerByQBId(string companyName, string qbCustomerId)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+                    SELECT * FROM Customers 
+                    WHERE CompanyName = @company 
+                    AND QuickBooksCustomerId = @qbId", conn);
+
+                cmd.Parameters.AddWithValue("@company", companyName);
+                cmd.Parameters.AddWithValue("@qbId", qbCustomerId);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return MapCustomerFromReader(reader);
+                }
+
+                return null;
+            }, "GetCustomerByQBId");
+        }
+
+        public Customer GetCustomerById(int customerId)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand("SELECT * FROM Customers WHERE Id = @id", conn);
+                cmd.Parameters.AddWithValue("@id", customerId);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return MapCustomerFromReader(reader);
+                }
+
+                return null;
+            }, "GetCustomerById");
+        }
+
+        public List<Customer> GetCustomersByCompany(string companyName)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                var customers = new List<Customer>();
+
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+                    SELECT * FROM Customers 
+                    WHERE CompanyName = @company 
+                    ORDER BY CustomerName", conn);
+
+                cmd.Parameters.AddWithValue("@company", companyName);
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    customers.Add(MapCustomerFromReader(reader));
+                }
+
+                return customers;
+            }, "GetCustomersByCompany");
+        }
+
+        public Customer GetOrCreateCustomer(string companyName, string qbCustomerId, CustomerData customerData)
+        {
+            try
+            {
+                var existing = GetCustomerByQBId(companyName, qbCustomerId);
+
+                if (existing != null)
+                {
+                    existing.CustomerName = customerData.CustomerName ?? existing.CustomerName;
+                    existing.CustomerNTN = customerData.NTN ?? existing.CustomerNTN;
+                    existing.CustomerStrNo = customerData.StrNo ?? existing.CustomerStrNo;
+                    existing.CustomerAddress = customerData.Address ?? existing.CustomerAddress;
+                    existing.CustomerPhone = customerData.Phone ?? existing.CustomerPhone;
+                    existing.CustomerEmail = customerData.Email ?? existing.CustomerEmail;
+                    existing.CustomerType = customerData.CustomerType ?? existing.CustomerType;
+                    existing.ModifiedDate = DateTime.Now;
+
+                    UpdateCustomer(existing);
+                    return existing;
+                }
+                else
+                {
+                    var newCustomer = new Customer
+                    {
+                        CompanyName = companyName,
+                        QuickBooksCustomerId = qbCustomerId,
+                        CustomerName = customerData.CustomerName ?? "Unknown Customer",
+                        CustomerNTN = customerData.NTN,
+                        CustomerStrNo = customerData.StrNo,
+                        CustomerAddress = customerData.Address,
+                        CustomerPhone = customerData.Phone,
+                        CustomerEmail = customerData.Email,
+                        CustomerType = customerData.CustomerType ?? "Unregistered",
+                        CreatedDate = DateTime.Now
+                    };
+
+                    InsertCustomer(newCustomer);
+                    return newCustomer;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ GetOrCreateCustomer failed: {ex.Message}");
+                throw new Exception($"Failed to get or create customer: {ex.Message}", ex);
+            }
+        }
+
+        public void InsertCustomer(Customer customer)
+        {
+            ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+                    INSERT INTO Customers (
+                        CompanyName, QuickBooksCustomerId, CustomerName,
+                        CustomerNTN, CustomerStrNo, CustomerAddress, CustomerPhone, CustomerEmail,
+                        CustomerType, CreatedDate
+                    ) VALUES (
+                        @company, @qbId, @name,
+                        @ntn, @strNo, @address, @phone, @email,
+                        @type, @created
+                    );
+                    SELECT last_insert_rowid();", conn);
+
+                cmd.Parameters.AddWithValue("@company", customer.CompanyName);
+                cmd.Parameters.AddWithValue("@qbId", customer.QuickBooksCustomerId);
+                cmd.Parameters.AddWithValue("@name", customer.CustomerName);
+                cmd.Parameters.AddWithValue("@ntn", customer.CustomerNTN ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@strNo", customer.CustomerStrNo ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@address", customer.CustomerAddress ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@phone", customer.CustomerPhone ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@email", customer.CustomerEmail ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@type", customer.CustomerType ?? "Unregistered");
+                cmd.Parameters.AddWithValue("@created", DateTime.Now);
+
+                customer.Id = Convert.ToInt32(cmd.ExecuteScalar());
+
+                Console.WriteLine($"✅ Created customer: {customer.CustomerName} (ID: {customer.Id})");
+                return true;
+            }, "InsertCustomer");
+        }
+
+        public void UpdateCustomer(Customer customer)
+        {
+            ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+                    UPDATE Customers SET
+                        CustomerName = @name,
+                        CustomerNTN = @ntn,
+                        CustomerStrNo = @strNo,
+                        CustomerAddress = @address,
+                        CustomerPhone = @phone,
+                        CustomerEmail = @email,
+                        CustomerType = @type,
+                        ModifiedDate = @modified
+                    WHERE Id = @id", conn);
+
+                cmd.Parameters.AddWithValue("@id", customer.Id);
+                cmd.Parameters.AddWithValue("@name", customer.CustomerName);
+                cmd.Parameters.AddWithValue("@ntn", customer.CustomerNTN ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@strNo", customer.CustomerStrNo ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@address", customer.CustomerAddress ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@phone", customer.CustomerPhone ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@email", customer.CustomerEmail ?? (object)DBNull.Value);
+                cmd.Parameters.AddWithValue("@type", customer.CustomerType ?? "Unregistered");
+                cmd.Parameters.AddWithValue("@modified", DateTime.Now);
+
+                cmd.ExecuteNonQuery();
+
+                Console.WriteLine($"✅ Updated customer: {customer.CustomerName} (ID: {customer.Id})");
+                return true;
+            }, "UpdateCustomer");
+        }
+
+        private Customer MapCustomerFromReader(SQLiteDataReader reader)
+        {
+            return new Customer
+            {
+                Id = Convert.ToInt32(reader["Id"]),
+                CompanyName = reader["CompanyName"].ToString(),
+                QuickBooksCustomerId = reader["QuickBooksCustomerId"].ToString(),
+                CustomerName = reader["CustomerName"].ToString(),
+                CustomerNTN = reader["CustomerNTN"] != DBNull.Value ? reader["CustomerNTN"].ToString() : null,
+                CustomerStrNo = reader["CustomerStrNo"] != DBNull.Value ? reader["CustomerStrNo"].ToString() : null,
+                CustomerAddress = reader["CustomerAddress"] != DBNull.Value ? reader["CustomerAddress"].ToString() : null,
+                CustomerPhone = reader["CustomerPhone"] != DBNull.Value ? reader["CustomerPhone"].ToString() : null,
+                CustomerEmail = reader["CustomerEmail"] != DBNull.Value ? reader["CustomerEmail"].ToString() : null,
+                CustomerType = reader["CustomerType"] != DBNull.Value ? reader["CustomerType"].ToString() : "Unregistered",
+                CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
+                ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null
+            };
+        }
 
         #endregion
 
@@ -338,47 +585,84 @@ namespace C2B_FBR_Connect.Services
 
                 var existingId = checkCmd.ExecuteScalar();
 
-                if (existingId == null)
-                {
-                    var cmd = new SQLiteCommand(@"
-                        INSERT INTO Invoices (
-                            CompanyName, QuickBooksInvoiceId, InvoiceNumber, 
-                            CustomerName, CustomerNTN, CustomerAddress, CustomerPhone, CustomerEmail, CustomerType,
-                            Amount, TotalAmount, TaxAmount, DiscountAmount,
-                            InvoiceDate, PaymentMode, Status, 
-                            FBR_IRN, FBR_QRCode, UploadDate, ErrorMessage, InvoiceType, CreatedDate
-                        ) VALUES (
-                            @company, @qbId, @invNum, 
-                            @custName, @custNTN, @custAddr, @custPhone, @custEmail, @custType,
-                            @amount, @totalAmount, @taxAmount, @discountAmount,
-                            @invDate, @paymentMode, @status, 
-                            @irn, @qr, @uploadDate, @error, @invoiceType, @created
-                        )", conn);
+                SQLiteCommand cmd;
 
-                    cmd.Parameters.AddWithValue("@company", invoice.CompanyName);
-                    cmd.Parameters.AddWithValue("@qbId", invoice.QuickBooksInvoiceId);
+                if (existingId != null)
+                {
+                    cmd = new SQLiteCommand(@"
+                        UPDATE Invoices SET
+                            InvoiceNumber = @invNum,
+                            CustomerId = @customerId,
+                            Amount = @amount,
+                            TotalAmount = @totalAmount,
+                            TaxAmount = @taxAmount,
+                            DiscountAmount = @discountAmount,
+                            InvoiceDate = @invDate,
+                            PaymentMode = @paymentMode,
+                            Status = @status,
+                            FBR_IRN = @irn,
+                            FBR_QRCode = @qr,
+                            UploadDate = @uploadDate,
+                            ErrorMessage = @error,
+                            InvoiceType = @invoiceType,
+                            ModifiedDate = @modified
+                        WHERE Id = @id", conn);
+
+                    cmd.Parameters.AddWithValue("@id", Convert.ToInt32(existingId));
                     cmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
-                    cmd.Parameters.AddWithValue("@custName", invoice.CustomerName);
-                    cmd.Parameters.AddWithValue("@custNTN", invoice.CustomerNTN ?? (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue("@custAddr", invoice.CustomerAddress ?? (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue("@custPhone", invoice.CustomerPhone ?? (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue("@custEmail", invoice.CustomerEmail ?? (object)DBNull.Value);
-                    cmd.Parameters.AddWithValue("@custType", invoice.CustomerType ?? "Unregistered");
+                    cmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
                     cmd.Parameters.AddWithValue("@amount", invoice.Amount);
                     cmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
                     cmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
                     cmd.Parameters.AddWithValue("@discountAmount", invoice.DiscountAmount);
                     cmd.Parameters.AddWithValue("@invDate", invoice.InvoiceDate != DateTime.MinValue ? invoice.InvoiceDate : (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@paymentMode", invoice.PaymentMode ?? "Cash");
-                    cmd.Parameters.AddWithValue("@status", invoice.Status);
+                    cmd.Parameters.AddWithValue("@status", invoice.Status ?? "Pending");
                     cmd.Parameters.AddWithValue("@irn", invoice.FBR_IRN ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@qr", invoice.FBR_QRCode ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@uploadDate", invoice.UploadDate ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@error", invoice.ErrorMessage ?? (object)DBNull.Value);
                     cmd.Parameters.AddWithValue("@invoiceType", invoice.InvoiceType ?? "Invoice");
-                    cmd.Parameters.AddWithValue("@created", invoice.CreatedDate);
+                    cmd.Parameters.AddWithValue("@modified", DateTime.Now);
 
                     cmd.ExecuteNonQuery();
+                    invoice.Id = Convert.ToInt32(existingId);
+                }
+                else
+                {
+                    cmd = new SQLiteCommand(@"
+                        INSERT INTO Invoices (
+                            CompanyName, QuickBooksInvoiceId, InvoiceNumber, CustomerId,
+                            Amount, TotalAmount, TaxAmount, DiscountAmount,
+                            InvoiceDate, PaymentMode, Status, InvoiceType,
+                            FBR_IRN, FBR_QRCode, UploadDate, ErrorMessage, CreatedDate
+                        ) VALUES (
+                            @company, @qbId, @invNum, @customerId,
+                            @amount, @totalAmount, @taxAmount, @discountAmount,
+                            @invDate, @paymentMode, @status, @invoiceType,
+                            @irn, @qr, @uploadDate, @error, @created
+                        );
+                        SELECT last_insert_rowid();", conn);
+
+                    cmd.Parameters.AddWithValue("@company", invoice.CompanyName);
+                    cmd.Parameters.AddWithValue("@qbId", invoice.QuickBooksInvoiceId);
+                    cmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
+                    cmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
+                    cmd.Parameters.AddWithValue("@amount", invoice.Amount);
+                    cmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
+                    cmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
+                    cmd.Parameters.AddWithValue("@discountAmount", invoice.DiscountAmount);
+                    cmd.Parameters.AddWithValue("@invDate", invoice.InvoiceDate != DateTime.MinValue ? invoice.InvoiceDate : (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@paymentMode", invoice.PaymentMode ?? "Cash");
+                    cmd.Parameters.AddWithValue("@status", invoice.Status ?? "Pending");
+                    cmd.Parameters.AddWithValue("@invoiceType", invoice.InvoiceType ?? "Invoice");
+                    cmd.Parameters.AddWithValue("@irn", invoice.FBR_IRN ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@qr", invoice.FBR_QRCode ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@uploadDate", invoice.UploadDate ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@error", invoice.ErrorMessage ?? (object)DBNull.Value);
+                    cmd.Parameters.AddWithValue("@created", invoice.CreatedDate);
+
+                    invoice.Id = Convert.ToInt32(cmd.ExecuteScalar());
                 }
 
                 return true;
@@ -426,12 +710,7 @@ namespace C2B_FBR_Connect.Services
                         var updateCmd = new SQLiteCommand(@"
                             UPDATE Invoices SET
                                 InvoiceNumber = @invNum,
-                                CustomerName = @custName,
-                                CustomerNTN = @custNTN,
-                                CustomerAddress = @custAddr,
-                                CustomerPhone = @custPhone,
-                                CustomerEmail = @custEmail,
-                                CustomerType = @custType,
+                                CustomerId = @customerId,
                                 Amount = @amount,
                                 TotalAmount = @totalAmount,
                                 TaxAmount = @taxAmount,
@@ -449,12 +728,7 @@ namespace C2B_FBR_Connect.Services
 
                         updateCmd.Parameters.AddWithValue("@id", invoiceId);
                         updateCmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
-                        updateCmd.Parameters.AddWithValue("@custName", invoice.CustomerName);
-                        updateCmd.Parameters.AddWithValue("@custNTN", invoice.CustomerNTN ?? (object)DBNull.Value);
-                        updateCmd.Parameters.AddWithValue("@custAddr", invoice.CustomerAddress ?? (object)DBNull.Value);
-                        updateCmd.Parameters.AddWithValue("@custPhone", invoice.CustomerPhone ?? (object)DBNull.Value);
-                        updateCmd.Parameters.AddWithValue("@custEmail", invoice.CustomerEmail ?? (object)DBNull.Value);
-                        updateCmd.Parameters.AddWithValue("@custType", invoice.CustomerType ?? "Unregistered");
+                        updateCmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
                         updateCmd.Parameters.AddWithValue("@amount", invoice.Amount);
                         updateCmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
                         updateCmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
@@ -477,14 +751,12 @@ namespace C2B_FBR_Connect.Services
                     {
                         var insertCmd = new SQLiteCommand(@"
                             INSERT INTO Invoices (
-                                CompanyName, QuickBooksInvoiceId, InvoiceNumber,
-                                CustomerName, CustomerNTN, CustomerAddress, CustomerPhone, CustomerEmail, CustomerType,
+                                CompanyName, QuickBooksInvoiceId, InvoiceNumber, CustomerId,
                                 Amount, TotalAmount, TaxAmount, DiscountAmount,
                                 InvoiceDate, PaymentMode, Status,
                                 FBR_IRN, FBR_QRCode, UploadDate, ErrorMessage, InvoiceType, CreatedDate
                             ) VALUES (
-                                @company, @qbId, @invNum,
-                                @custName, @custNTN, @custAddr, @custPhone, @custEmail, @custType,
+                                @company, @qbId, @invNum, @customerId,
                                 @amount, @totalAmount, @taxAmount, @discountAmount,
                                 @invDate, @paymentMode, @status,
                                 @irn, @qr, @uploadDate, @error, @invoiceType, @created
@@ -494,12 +766,7 @@ namespace C2B_FBR_Connect.Services
                         insertCmd.Parameters.AddWithValue("@company", invoice.CompanyName);
                         insertCmd.Parameters.AddWithValue("@qbId", invoice.QuickBooksInvoiceId);
                         insertCmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
-                        insertCmd.Parameters.AddWithValue("@custName", invoice.CustomerName);
-                        insertCmd.Parameters.AddWithValue("@custNTN", invoice.CustomerNTN ?? (object)DBNull.Value);
-                        insertCmd.Parameters.AddWithValue("@custAddr", invoice.CustomerAddress ?? (object)DBNull.Value);
-                        insertCmd.Parameters.AddWithValue("@custPhone", invoice.CustomerPhone ?? (object)DBNull.Value);
-                        insertCmd.Parameters.AddWithValue("@custEmail", invoice.CustomerEmail ?? (object)DBNull.Value);
-                        insertCmd.Parameters.AddWithValue("@custType", invoice.CustomerType ?? "Unregistered");
+                        insertCmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
                         insertCmd.Parameters.AddWithValue("@amount", invoice.Amount);
                         insertCmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
                         insertCmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
@@ -640,27 +907,29 @@ namespace C2B_FBR_Connect.Services
                 {
                     connection.Open();
 
-                    string query = @"
-                        SELECT 
-                            i.Id, i.CompanyName, i.QuickBooksInvoiceId, i.InvoiceNumber,
-                            i.CustomerName, i.CustomerNTN, i.CustomerAddress, i.CustomerPhone,
-                            i.CustomerEmail, i.CustomerType, i.Amount, i.TotalAmount,
-                            i.TaxAmount, i.DiscountAmount, i.InvoiceDate, i.PaymentMode,
-                            i.Status, i.FBR_IRN, i.FBR_QRCode, i.UploadDate,
-                            i.CreatedDate, i.ModifiedDate, i.ErrorMessage, i.InvoiceType,
-                            ii.Id as ItemId, ii.InvoiceId as ItemInvoiceId,
-                            ii.ItemName, ii.ItemDescription, ii.Quantity, ii.UnitPrice,
-                            ii.TotalPrice, ii.NetAmount, ii.TaxRate, ii.SalesTaxAmount,
-                            ii.TotalValue, ii.HSCode, ii.UnitOfMeasure, ii.RetailPrice,
-                            ii.ExtraTax, ii.FurtherTax, ii.FedPayable,
-                            ii.SalesTaxWithheldAtSource, ii.Discount, ii.SaleType,
-                            ii.SroScheduleNo, ii.SroItemSerialNo
-                        FROM Invoices i
-                        LEFT JOIN InvoiceItems ii ON i.Id = ii.InvoiceId
-                        WHERE i.CompanyName = @CompanyName
-                        ORDER BY i.CreatedDate DESC, ii.Id";
+                    // STEP 1: Get all invoices with customer info (NO items in this query)
+                    string invoiceQuery = @"
+                SELECT 
+                    i.Id, i.CompanyName, i.QuickBooksInvoiceId, i.InvoiceNumber, i.CustomerId,
+                    i.Amount, i.TotalAmount, i.TaxAmount, i.DiscountAmount, 
+                    i.InvoiceDate, i.PaymentMode, i.Status, i.InvoiceType,
+                    i.FBR_IRN, i.FBR_QRCode, i.UploadDate, i.ErrorMessage,
+                    i.CreatedDate, i.ModifiedDate,
+                    c.Id as Customer_Id,
+                    c.QuickBooksCustomerId as Customer_QBId,
+                    c.CustomerName,
+                    c.CustomerNTN,
+                    c.CustomerStrNo,
+                    c.CustomerAddress,
+                    c.CustomerPhone,
+                    c.CustomerEmail,
+                    c.CustomerType
+                FROM Invoices i
+                LEFT JOIN Customers c ON i.CustomerId = c.Id
+                WHERE i.CompanyName = @CompanyName
+                ORDER BY i.CreatedDate DESC";
 
-                    using (var cmd = new SQLiteCommand(query, connection))
+                    using (var cmd = new SQLiteCommand(invoiceQuery, connection))
                     {
                         cmd.Parameters.AddWithValue("@CompanyName", companyName);
 
@@ -670,65 +939,100 @@ namespace C2B_FBR_Connect.Services
                             {
                                 int invoiceId = Convert.ToInt32(reader["Id"]);
 
-                                if (!invoiceDict.ContainsKey(invoiceId))
+                                var invoice = new Invoice
                                 {
-                                    invoiceDict[invoiceId] = new Invoice
+                                    Id = invoiceId,
+                                    CompanyName = reader["CompanyName"]?.ToString(),
+                                    QuickBooksInvoiceId = reader["QuickBooksInvoiceId"]?.ToString(),
+                                    InvoiceNumber = reader["InvoiceNumber"]?.ToString(),
+                                    CustomerId = Convert.ToInt32(reader["CustomerId"]),
+                                    Amount = reader["Amount"] != DBNull.Value ? Convert.ToDecimal(reader["Amount"]) : 0,
+                                    TotalAmount = reader["TotalAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TotalAmount"]) : 0,
+                                    TaxAmount = reader["TaxAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TaxAmount"]) : 0,
+                                    DiscountAmount = reader["DiscountAmount"] != DBNull.Value ? Convert.ToDecimal(reader["DiscountAmount"]) : 0,
+                                    InvoiceDate = reader["InvoiceDate"] != DBNull.Value ? Convert.ToDateTime(reader["InvoiceDate"]) : DateTime.MinValue,
+                                    PaymentMode = reader["PaymentMode"]?.ToString() ?? "Cash",
+                                    Status = reader["Status"]?.ToString() ?? "Pending",
+                                    InvoiceType = reader["InvoiceType"]?.ToString() ?? "Invoice",
+                                    FBR_IRN = reader["FBR_IRN"] != DBNull.Value ? reader["FBR_IRN"].ToString() : null,
+                                    FBR_QRCode = reader["FBR_QRCode"] != DBNull.Value ? reader["FBR_QRCode"].ToString() : null,
+                                    UploadDate = reader["UploadDate"] != DBNull.Value ? Convert.ToDateTime(reader["UploadDate"]) : (DateTime?)null,
+                                    ErrorMessage = reader["ErrorMessage"] != DBNull.Value ? reader["ErrorMessage"].ToString() : null,
+                                    CreatedDate = reader["CreatedDate"] != DBNull.Value ? Convert.ToDateTime(reader["CreatedDate"]) : DateTime.Now,
+                                    ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null,
+                                    Items = new List<InvoiceItem>()
+                                };
+
+                                // Populate Customer navigation property
+                                if (reader["Customer_Id"] != DBNull.Value)
+                                {
+                                    invoice.Customer = new Customer
                                     {
-                                        Id = invoiceId,
-                                        CompanyName = reader["CompanyName"].ToString(),
-                                        QuickBooksInvoiceId = reader["QuickBooksInvoiceId"].ToString(),
-                                        InvoiceNumber = reader["InvoiceNumber"].ToString(),
-                                        CustomerName = reader["CustomerName"].ToString(),
-                                        CustomerNTN = reader["CustomerNTN"]?.ToString(),
-                                        CustomerAddress = reader["CustomerAddress"]?.ToString(),
-                                        CustomerPhone = reader["CustomerPhone"]?.ToString(),
-                                        CustomerEmail = reader["CustomerEmail"]?.ToString(),
-                                        CustomerType = reader["CustomerType"] != DBNull.Value ? reader["CustomerType"].ToString() : "Unregistered",
-                                        Amount = Convert.ToDecimal(reader["Amount"]),
-                                        TotalAmount = reader["TotalAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TotalAmount"]) : 0,
-                                        TaxAmount = reader["TaxAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TaxAmount"]) : 0,
-                                        DiscountAmount = reader["DiscountAmount"] != DBNull.Value ? Convert.ToDecimal(reader["DiscountAmount"]) : 0,
-                                        InvoiceDate = reader["InvoiceDate"] != DBNull.Value ? Convert.ToDateTime(reader["InvoiceDate"]) : DateTime.MinValue,
-                                        PaymentMode = reader["PaymentMode"]?.ToString() ?? "Cash",
-                                        Status = reader["Status"].ToString(),
-                                        FBR_IRN = reader["FBR_IRN"]?.ToString(),
-                                        FBR_QRCode = reader["FBR_QRCode"]?.ToString(),
-                                        UploadDate = reader["UploadDate"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(reader["UploadDate"]) : null,
-                                        ErrorMessage = reader["ErrorMessage"]?.ToString(),
-                                        CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
-                                        ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? (DateTime?)Convert.ToDateTime(reader["ModifiedDate"]) : null,
-                                        InvoiceType = reader["InvoiceType"] != DBNull.Value ? reader["InvoiceType"].ToString() : "Invoice",
-                                        Items = new List<InvoiceItem>()
+                                        Id = Convert.ToInt32(reader["Customer_Id"]),
+                                        QuickBooksCustomerId = reader["Customer_QBId"]?.ToString(),
+                                        CustomerName = reader["CustomerName"]?.ToString(),
+                                        CustomerNTN = reader["CustomerNTN"] != DBNull.Value ? reader["CustomerNTN"].ToString() : null,
+                                        CustomerStrNo = reader["CustomerStrNo"] != DBNull.Value ? reader["CustomerStrNo"].ToString() : null,
+                                        CustomerAddress = reader["CustomerAddress"] != DBNull.Value ? reader["CustomerAddress"].ToString() : null,
+                                        CustomerPhone = reader["CustomerPhone"] != DBNull.Value ? reader["CustomerPhone"].ToString() : null,
+                                        CustomerEmail = reader["CustomerEmail"] != DBNull.Value ? reader["CustomerEmail"].ToString() : null,
+                                        CustomerType = reader["CustomerType"]?.ToString() ?? "Unregistered"
                                     };
                                 }
 
-                                if (reader["ItemId"] != DBNull.Value)
+                                invoiceDict[invoiceId] = invoice;
+                            }
+                        }
+                    }
+
+                    // STEP 2: Get all items separately (using standard column names)
+                    if (invoiceDict.Count > 0)
+                    {
+                        string itemsQuery = @"
+                    SELECT * FROM InvoiceItems 
+                    WHERE InvoiceId IN (SELECT Id FROM Invoices WHERE CompanyName = @CompanyName)
+                    ORDER BY InvoiceId, Id";
+
+                        using (var cmd = new SQLiteCommand(itemsQuery, connection))
+                        {
+                            cmd.Parameters.AddWithValue("@CompanyName", companyName);
+
+                            using (var reader = cmd.ExecuteReader())
+                            {
+                                while (reader.Read())
                                 {
-                                    invoiceDict[invoiceId].Items.Add(new InvoiceItem
+                                    int invoiceId = Convert.ToInt32(reader["InvoiceId"]);
+
+                                    if (invoiceDict.ContainsKey(invoiceId))
                                     {
-                                        Id = Convert.ToInt32(reader["ItemId"]),
-                                        InvoiceId = Convert.ToInt32(reader["ItemInvoiceId"]),
-                                        ItemName = reader["ItemName"].ToString(),
-                                        ItemDescription = reader["ItemDescription"]?.ToString() ?? "",
-                                        Quantity = Convert.ToInt32(reader["Quantity"]),
-                                        UnitPrice = Convert.ToDecimal(reader["UnitPrice"]),
-                                        TotalPrice = Convert.ToDecimal(reader["TotalPrice"]),
-                                        NetAmount = reader["NetAmount"] != DBNull.Value ? Convert.ToDecimal(reader["NetAmount"]) : 0,
-                                        TaxRate = Convert.ToDecimal(reader["TaxRate"]),
-                                        SalesTaxAmount = Convert.ToDecimal(reader["SalesTaxAmount"]),
-                                        TotalValue = Convert.ToDecimal(reader["TotalValue"]),
-                                        HSCode = reader["HSCode"]?.ToString() ?? "",
-                                        UnitOfMeasure = reader["UnitOfMeasure"]?.ToString() ?? "",
-                                        RetailPrice = reader["RetailPrice"] != DBNull.Value ? Convert.ToDecimal(reader["RetailPrice"]) : 0,
-                                        ExtraTax = reader["ExtraTax"] != DBNull.Value ? Convert.ToDecimal(reader["ExtraTax"]) : 0,
-                                        FurtherTax = reader["FurtherTax"] != DBNull.Value ? Convert.ToDecimal(reader["FurtherTax"]) : 0,
-                                        FedPayable = reader["FedPayable"] != DBNull.Value ? Convert.ToDecimal(reader["FedPayable"]) : 0,
-                                        SalesTaxWithheldAtSource = reader["SalesTaxWithheldAtSource"] != DBNull.Value ? Convert.ToDecimal(reader["SalesTaxWithheldAtSource"]) : 0,
-                                        Discount = reader["Discount"] != DBNull.Value ? Convert.ToDecimal(reader["Discount"]) : 0,
-                                        SaleType = reader["SaleType"]?.ToString() ?? "",
-                                        SroScheduleNo = reader["SroScheduleNo"]?.ToString() ?? "",
-                                        SroItemSerialNo = reader["SroItemSerialNo"]?.ToString() ?? ""
-                                    });
+                                        var item = new InvoiceItem
+                                        {
+                                            Id = Convert.ToInt32(reader["Id"]),
+                                            InvoiceId = invoiceId,
+                                            ItemName = reader["ItemName"]?.ToString(),
+                                            ItemDescription = reader["ItemDescription"] != DBNull.Value ? reader["ItemDescription"].ToString() : null,
+                                            Quantity = Convert.ToInt32(reader["Quantity"]),
+                                            UnitPrice = Convert.ToDecimal(reader["UnitPrice"]),
+                                            TotalPrice = Convert.ToDecimal(reader["TotalPrice"]),
+                                            NetAmount = reader["NetAmount"] != DBNull.Value ? Convert.ToDecimal(reader["NetAmount"]) : 0,
+                                            TaxRate = reader["TaxRate"] != DBNull.Value ? Convert.ToDecimal(reader["TaxRate"]) : 0,
+                                            SalesTaxAmount = reader["SalesTaxAmount"] != DBNull.Value ? Convert.ToDecimal(reader["SalesTaxAmount"]) : 0,
+                                            TotalValue = reader["TotalValue"] != DBNull.Value ? Convert.ToDecimal(reader["TotalValue"]) : 0,
+                                            HSCode = reader["HSCode"]?.ToString(),
+                                            UnitOfMeasure = reader["UnitOfMeasure"]?.ToString(),
+                                            RetailPrice = reader["RetailPrice"] != DBNull.Value ? Convert.ToDecimal(reader["RetailPrice"]) : 0,
+                                            ExtraTax = reader["ExtraTax"] != DBNull.Value ? Convert.ToDecimal(reader["ExtraTax"]) : 0,
+                                            FurtherTax = reader["FurtherTax"] != DBNull.Value ? Convert.ToDecimal(reader["FurtherTax"]) : 0,
+                                            FedPayable = reader["FedPayable"] != DBNull.Value ? Convert.ToDecimal(reader["FedPayable"]) : 0,
+                                            SalesTaxWithheldAtSource = reader["SalesTaxWithheldAtSource"] != DBNull.Value ? Convert.ToDecimal(reader["SalesTaxWithheldAtSource"]) : 0,
+                                            Discount = reader["Discount"] != DBNull.Value ? Convert.ToDecimal(reader["Discount"]) : 0,
+                                            SaleType = reader["SaleType"]?.ToString(),
+                                            SroScheduleNo = reader["SroScheduleNo"]?.ToString(),
+                                            SroItemSerialNo = reader["SroItemSerialNo"]?.ToString()
+                                        };
+
+                                        invoiceDict[invoiceId].Items.Add(item);
+                                    }
                                 }
                             }
                         }
@@ -738,6 +1042,7 @@ namespace C2B_FBR_Connect.Services
                 return invoiceDict.Values.ToList();
             }, "GetInvoicesWithDetails");
         }
+
 
         private void SaveInvoiceWithDetailsInternal(Invoice invoice, SQLiteConnection connection, SQLiteTransaction transaction)
         {
@@ -775,12 +1080,7 @@ namespace C2B_FBR_Connect.Services
                 string updateQuery = @"
                     UPDATE Invoices SET
                         InvoiceNumber = @invNum,
-                        CustomerName = @custName,
-                        CustomerNTN = @custNTN,
-                        CustomerAddress = @custAddr,
-                        CustomerPhone = @custPhone,
-                        CustomerEmail = @custEmail,
-                        CustomerType = @custType,
+                        CustomerId = @customerId,
                         Amount = @amount,
                         TotalAmount = @totalAmount,
                         TaxAmount = @taxAmount,
@@ -800,12 +1100,7 @@ namespace C2B_FBR_Connect.Services
                 {
                     updateCmd.Parameters.AddWithValue("@id", invoiceId);
                     updateCmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
-                    updateCmd.Parameters.AddWithValue("@custName", invoice.CustomerName);
-                    updateCmd.Parameters.AddWithValue("@custNTN", invoice.CustomerNTN ?? (object)DBNull.Value);
-                    updateCmd.Parameters.AddWithValue("@custAddr", invoice.CustomerAddress ?? (object)DBNull.Value);
-                    updateCmd.Parameters.AddWithValue("@custPhone", invoice.CustomerPhone ?? (object)DBNull.Value);
-                    updateCmd.Parameters.AddWithValue("@custEmail", invoice.CustomerEmail ?? (object)DBNull.Value);
-                    updateCmd.Parameters.AddWithValue("@custType", invoice.CustomerType ?? "Unregistered");
+                    updateCmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
                     updateCmd.Parameters.AddWithValue("@amount", invoice.Amount);
                     updateCmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
                     updateCmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
@@ -827,14 +1122,12 @@ namespace C2B_FBR_Connect.Services
             {
                 string insertQuery = @"
                     INSERT INTO Invoices (
-                        CompanyName, QuickBooksInvoiceId, InvoiceNumber,
-                        CustomerName, CustomerNTN, CustomerAddress, CustomerPhone, CustomerEmail, CustomerType,
+                        CompanyName, QuickBooksInvoiceId, InvoiceNumber, CustomerId,
                         Amount, TotalAmount, TaxAmount, DiscountAmount,
                         InvoiceDate, PaymentMode, Status,
                         FBR_IRN, FBR_QRCode, UploadDate, ErrorMessage, InvoiceType, CreatedDate
                     ) VALUES (
-                        @company, @qbId, @invNum,
-                        @custName, @custNTN, @custAddr, @custPhone, @custEmail, @custType,
+                        @company, @qbId, @invNum, @customerId,
                         @amount, @totalAmount, @taxAmount, @discountAmount,
                         @invDate, @paymentMode, @status,
                         @irn, @qr, @uploadDate, @error, @invoiceType, @created
@@ -846,12 +1139,7 @@ namespace C2B_FBR_Connect.Services
                     insertCmd.Parameters.AddWithValue("@company", invoice.CompanyName);
                     insertCmd.Parameters.AddWithValue("@qbId", invoice.QuickBooksInvoiceId);
                     insertCmd.Parameters.AddWithValue("@invNum", invoice.InvoiceNumber);
-                    insertCmd.Parameters.AddWithValue("@custName", invoice.CustomerName);
-                    insertCmd.Parameters.AddWithValue("@custNTN", invoice.CustomerNTN ?? (object)DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@custAddr", invoice.CustomerAddress ?? (object)DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@custPhone", invoice.CustomerPhone ?? (object)DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@custEmail", invoice.CustomerEmail ?? (object)DBNull.Value);
-                    insertCmd.Parameters.AddWithValue("@custType", invoice.CustomerType ?? "Unregistered");
+                    insertCmd.Parameters.AddWithValue("@customerId", invoice.CustomerId);
                     insertCmd.Parameters.AddWithValue("@amount", invoice.Amount);
                     insertCmd.Parameters.AddWithValue("@totalAmount", invoice.TotalAmount);
                     insertCmd.Parameters.AddWithValue("@taxAmount", invoice.TaxAmount);
@@ -945,16 +1233,47 @@ namespace C2B_FBR_Connect.Services
                 conn.Open();
 
                 var cmd = new SQLiteCommand(@"
-                    SELECT * FROM Invoices 
-                    WHERE CompanyName = @company 
-                    ORDER BY CreatedDate DESC", conn);
+            SELECT 
+                i.*,
+                c.Id as Customer_Id,
+                c.QuickBooksCustomerId as Customer_QBId,
+                c.CustomerName,
+                c.CustomerNTN,
+                c.CustomerStrNo,
+                c.CustomerAddress,
+                c.CustomerPhone,
+                c.CustomerEmail,
+                c.CustomerType
+            FROM Invoices i
+            LEFT JOIN Customers c ON i.CustomerId = c.Id
+            WHERE i.CompanyName = @company 
+            ORDER BY i.CreatedDate DESC", conn);
 
                 cmd.Parameters.AddWithValue("@company", companyName);
 
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    invoices.Add(MapInvoiceFromReader(reader));
+                    var invoice = MapInvoiceFromReader(reader);
+
+                    // Populate Customer navigation property
+                    if (reader["Customer_Id"] != DBNull.Value)
+                    {
+                        invoice.Customer = new Customer
+                        {
+                            Id = Convert.ToInt32(reader["Customer_Id"]),
+                            QuickBooksCustomerId = reader["Customer_QBId"]?.ToString(),
+                            CustomerName = reader["CustomerName"]?.ToString(),
+                            CustomerNTN = reader["CustomerNTN"] != DBNull.Value ? reader["CustomerNTN"].ToString() : null,
+                            CustomerStrNo = reader["CustomerStrNo"] != DBNull.Value ? reader["CustomerStrNo"].ToString() : null,
+                            CustomerAddress = reader["CustomerAddress"] != DBNull.Value ? reader["CustomerAddress"].ToString() : null,
+                            CustomerPhone = reader["CustomerPhone"] != DBNull.Value ? reader["CustomerPhone"].ToString() : null,
+                            CustomerEmail = reader["CustomerEmail"] != DBNull.Value ? reader["CustomerEmail"].ToString() : null,
+                            CustomerType = reader["CustomerType"]?.ToString() ?? "Unregistered"
+                        };
+                    }
+
+                    invoices.Add(invoice);
                 }
 
                 return invoices;
@@ -968,6 +1287,7 @@ namespace C2B_FBR_Connect.Services
                 using var conn = new SQLiteConnection(_connectionString);
                 conn.Open();
 
+                // Load Invoice
                 var cmd = new SQLiteCommand(@"
                     SELECT * FROM Invoices 
                     WHERE QuickBooksInvoiceId = @qbId 
@@ -981,17 +1301,31 @@ namespace C2B_FBR_Connect.Services
                 using (var reader = cmd.ExecuteReader())
                 {
                     if (reader.Read())
-                    {
                         invoice = MapInvoiceFromReader(reader);
-                    }
                 }
 
                 if (invoice == null)
                     return null;
 
+                // Load Customer
+                if (invoice.CustomerId > 0)
+                {
+                    var customerCmd = new SQLiteCommand(
+                        "SELECT * FROM Customers WHERE Id = @id", conn);
+
+                    customerCmd.Parameters.AddWithValue("@id", invoice.CustomerId);
+
+                    using var customerReader = customerCmd.ExecuteReader();
+                    if (customerReader.Read())
+                    {
+                        invoice.Customer = MapCustomerFromReader(customerReader);
+                    }
+                }
+
+                // Load Invoice Items
                 var itemsCmd = new SQLiteCommand(
-                    "SELECT * FROM InvoiceItems WHERE InvoiceId = @invoiceId",
-                    conn);
+                    "SELECT * FROM InvoiceItems WHERE InvoiceId = @invoiceId", conn);
+
                 itemsCmd.Parameters.AddWithValue("@invoiceId", invoice.Id);
 
                 invoice.Items = new List<InvoiceItem>();
@@ -999,9 +1333,7 @@ namespace C2B_FBR_Connect.Services
                 using (var itemsReader = itemsCmd.ExecuteReader())
                 {
                     while (itemsReader.Read())
-                    {
                         invoice.Items.Add(MapInvoiceItemFromReader(itemsReader));
-                    }
                 }
 
                 return invoice;
@@ -1049,26 +1381,21 @@ namespace C2B_FBR_Connect.Services
                 CompanyName = reader["CompanyName"].ToString(),
                 QuickBooksInvoiceId = reader["QuickBooksInvoiceId"].ToString(),
                 InvoiceNumber = reader["InvoiceNumber"].ToString(),
-                CustomerName = reader["CustomerName"].ToString(),
-                CustomerNTN = reader["CustomerNTN"]?.ToString(),
-                CustomerAddress = reader["CustomerAddress"]?.ToString(),
-                CustomerPhone = reader["CustomerPhone"]?.ToString(),
-                CustomerEmail = reader["CustomerEmail"]?.ToString(),
-                CustomerType = reader["CustomerType"] != DBNull.Value ? reader["CustomerType"].ToString() : "Unregistered",
+                CustomerId = Convert.ToInt32(reader["CustomerId"]),
                 Amount = Convert.ToDecimal(reader["Amount"]),
                 TotalAmount = reader["TotalAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TotalAmount"]) : 0,
                 TaxAmount = reader["TaxAmount"] != DBNull.Value ? Convert.ToDecimal(reader["TaxAmount"]) : 0,
                 DiscountAmount = reader["DiscountAmount"] != DBNull.Value ? Convert.ToDecimal(reader["DiscountAmount"]) : 0,
                 InvoiceDate = reader["InvoiceDate"] != DBNull.Value ? Convert.ToDateTime(reader["InvoiceDate"]) : DateTime.MinValue,
                 PaymentMode = reader["PaymentMode"]?.ToString() ?? "Cash",
-                Status = reader["Status"].ToString(),
-                FBR_IRN = reader["FBR_IRN"]?.ToString(),
-                FBR_QRCode = reader["FBR_QRCode"]?.ToString(),
+                Status = reader["Status"]?.ToString() ?? "Pending",
+                InvoiceType = reader["InvoiceType"]?.ToString() ?? "Invoice",
+                FBR_IRN = reader["FBR_IRN"] != DBNull.Value ? reader["FBR_IRN"].ToString() : null,
+                FBR_QRCode = reader["FBR_QRCode"] != DBNull.Value ? reader["FBR_QRCode"].ToString() : null,
                 UploadDate = reader["UploadDate"] != DBNull.Value ? Convert.ToDateTime(reader["UploadDate"]) : (DateTime?)null,
+                ErrorMessage = reader["ErrorMessage"] != DBNull.Value ? reader["ErrorMessage"].ToString() : null,
                 CreatedDate = Convert.ToDateTime(reader["CreatedDate"]),
                 ModifiedDate = reader["ModifiedDate"] != DBNull.Value ? Convert.ToDateTime(reader["ModifiedDate"]) : (DateTime?)null,
-                ErrorMessage = reader["ErrorMessage"]?.ToString(),
-                InvoiceType = reader["InvoiceType"] != DBNull.Value ? reader["InvoiceType"].ToString() : "Invoice",
                 Items = new List<InvoiceItem>()
             };
         }
@@ -1080,25 +1407,25 @@ namespace C2B_FBR_Connect.Services
                 Id = Convert.ToInt32(reader["Id"]),
                 InvoiceId = Convert.ToInt32(reader["InvoiceId"]),
                 ItemName = reader["ItemName"].ToString(),
-                ItemDescription = reader["ItemDescription"]?.ToString() ?? "",
+                ItemDescription = reader["ItemDescription"]?.ToString(),
                 Quantity = Convert.ToInt32(reader["Quantity"]),
                 UnitPrice = Convert.ToDecimal(reader["UnitPrice"]),
                 TotalPrice = Convert.ToDecimal(reader["TotalPrice"]),
                 NetAmount = reader["NetAmount"] != DBNull.Value ? Convert.ToDecimal(reader["NetAmount"]) : 0,
-                TaxRate = Convert.ToDecimal(reader["TaxRate"]),
-                SalesTaxAmount = Convert.ToDecimal(reader["SalesTaxAmount"]),
-                TotalValue = Convert.ToDecimal(reader["TotalValue"]),
-                HSCode = reader["HSCode"]?.ToString() ?? "",
-                UnitOfMeasure = reader["UnitOfMeasure"]?.ToString() ?? "",
+                TaxRate = reader["TaxRate"] != DBNull.Value ? Convert.ToDecimal(reader["TaxRate"]) : 0,
+                SalesTaxAmount = reader["SalesTaxAmount"] != DBNull.Value ? Convert.ToDecimal(reader["SalesTaxAmount"]) : 0,
+                TotalValue = reader["TotalValue"] != DBNull.Value ? Convert.ToDecimal(reader["TotalValue"]) : 0,
+                HSCode = reader["HSCode"]?.ToString(),
+                UnitOfMeasure = reader["UnitOfMeasure"]?.ToString(),
                 RetailPrice = reader["RetailPrice"] != DBNull.Value ? Convert.ToDecimal(reader["RetailPrice"]) : 0,
                 ExtraTax = reader["ExtraTax"] != DBNull.Value ? Convert.ToDecimal(reader["ExtraTax"]) : 0,
                 FurtherTax = reader["FurtherTax"] != DBNull.Value ? Convert.ToDecimal(reader["FurtherTax"]) : 0,
                 FedPayable = reader["FedPayable"] != DBNull.Value ? Convert.ToDecimal(reader["FedPayable"]) : 0,
                 SalesTaxWithheldAtSource = reader["SalesTaxWithheldAtSource"] != DBNull.Value ? Convert.ToDecimal(reader["SalesTaxWithheldAtSource"]) : 0,
                 Discount = reader["Discount"] != DBNull.Value ? Convert.ToDecimal(reader["Discount"]) : 0,
-                SaleType = reader["SaleType"]?.ToString() ?? "",
-                SroScheduleNo = reader["SroScheduleNo"]?.ToString() ?? "",
-                SroItemSerialNo = reader["SroItemSerialNo"]?.ToString() ?? ""
+                SaleType = reader["SaleType"]?.ToString(),
+                SroScheduleNo = reader["SroScheduleNo"]?.ToString(),
+                SroItemSerialNo = reader["SroItemSerialNo"]?.ToString()
             };
         }
 
@@ -1218,46 +1545,5 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
-
-        # region Migrations
-        private void MigrateDatabase()
-        {
-            lock (_lockObject)
-            {
-                using var conn = new SQLiteConnection(_connectionString);
-                conn.Open();
-
-                // Check if Environment column exists
-                var checkColumnCmd = new SQLiteCommand(
-                    "PRAGMA table_info(Companies);", conn);
-
-                bool hasEnvironmentColumn = false;
-                using (var reader = checkColumnCmd.ExecuteReader())
-                {
-                    while (reader.Read())
-                    {
-                        string columnName = reader["name"].ToString();
-                        if (columnName == "Environment")
-                        {
-                            hasEnvironmentColumn = true;
-                            break;
-                        }
-                    }
-                }
-
-                // Add Environment column if it doesn't exist
-                if (!hasEnvironmentColumn)
-                {
-                    Console.WriteLine("⚙️ Adding Environment column to Companies table...");
-                    var alterCmd = new SQLiteCommand(
-                        "ALTER TABLE Companies ADD COLUMN Environment TEXT DEFAULT 'Sandbox';", conn);
-                    alterCmd.ExecuteNonQuery();
-                    Console.WriteLine("✅ Environment column added successfully");
-                }
-            }
-        }
-        #endregion
-
-
     }
 }

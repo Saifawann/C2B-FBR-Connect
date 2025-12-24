@@ -16,9 +16,6 @@ namespace C2B_FBR_Connect.Managers
         private readonly PDFService _pdf;
         private Company _currentCompany;
 
-        // Cache for FBR payloads (used during upload)
-        private readonly Dictionary<string, FBRInvoicePayload> _payloadCache = new();
-
         public InvoiceManager(DatabaseService db, QuickBooksService qb,
             FBRApiService fbr, PDFService pdf)
         {
@@ -33,15 +30,9 @@ namespace C2B_FBR_Connect.Managers
             _currentCompany = company;
         }
 
-        public void ClearCache()
-        {
-            _payloadCache.Clear();
-            Console.WriteLine("🗑️ Payload cache cleared");
-        }
-
         /// <summary>
-        /// OPTIMIZED: Fetch only basic invoice list - NO detailed processing
-        /// Full processing happens only during Upload or View Details
+        /// Fetch invoices/credit memos from QuickBooks and save to database
+        /// Always fetches fresh data - no caching
         /// </summary>
         public async Task<List<Invoice>> FetchFromQuickBooks(DateTime? dateFrom = null, DateTime? dateTo = null,
             bool includeInvoices = true, bool includeCreditMemos = false)
@@ -51,9 +42,7 @@ namespace C2B_FBR_Connect.Managers
                 if (!_qb.Connect(_currentCompany))
                     throw new Exception("Failed to connect to QuickBooks");
 
-                _payloadCache.Clear();
-
-                Console.WriteLine("🔄 Starting FAST transaction fetch from QuickBooks...");
+                Console.WriteLine("🔄 Fetching transactions from QuickBooks...");
 
                 string dateRangeInfo = "";
                 if (dateFrom.HasValue && dateTo.HasValue)
@@ -65,7 +54,9 @@ namespace C2B_FBR_Connect.Managers
 
                 Console.WriteLine($"📅 Date range{dateRangeInfo}");
 
-                // ✅ This already fetches basic invoice data efficiently
+                // ========================================
+                // STEP 1: Fetch basic invoice data from QuickBooks
+                // ========================================
                 var qbTransactions = _qb.FetchTransactions(dateFrom, dateTo, true, includeInvoices, includeCreditMemos);
                 Console.WriteLine($"📥 Found {qbTransactions.Count} transactions in QuickBooks\n");
 
@@ -75,60 +66,130 @@ namespace C2B_FBR_Connect.Managers
                     return new List<Invoice>();
                 }
 
-                // Load existing invoices for status preservation
+                // ========================================
+                // STEP 2: Extract unique customer IDs from invoices
+                // ========================================
+                Console.WriteLine($"👥 Extracting unique customers...");
+                var uniqueCustomerIds = qbTransactions
+                    .Where(i => !string.IsNullOrEmpty(i.QuickBooksCustomerId))
+                    .Select(i => i.QuickBooksCustomerId)
+                    .Distinct()
+                    .ToList();
+
+                Console.WriteLine($"📊 Found {uniqueCustomerIds.Count} unique customers\n");
+
+                // ========================================
+                // STEP 3: Fetch/Update customer data in database
+                // ========================================
+                Console.WriteLine($"🔄 Fetching/updating customer data from QuickBooks...");
+                var customerMap = new Dictionary<string, Customer>();
+
+                foreach (var qbCustomerId in uniqueCustomerIds)
+                {
+                    try
+                    {
+                        // Fetch fresh customer data from QuickBooks
+                        var customerData = _qb.FetchCustomerDetails(qbCustomerId);
+
+                        // Get or create customer in database
+                        var customer = _db.GetOrCreateCustomer(
+                            _qb.CurrentCompanyName,
+                            qbCustomerId,
+                            customerData
+                        );
+
+                        customerMap[qbCustomerId] = customer;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"⚠️ Error fetching customer {qbCustomerId}: {ex.Message}");
+                        // Continue with other customers
+                    }
+                }
+
+                Console.WriteLine($"✅ Processed {customerMap.Count} customers\n");
+
+                // ========================================
+                // STEP 4: Load existing invoices for status preservation
+                // ========================================
                 Console.WriteLine($"📊 Loading existing invoices from database...");
                 var existingInvoices = _db.GetInvoicesWithDetails(_qb.CurrentCompanyName)
                     .ToDictionary(i => i.QuickBooksInvoiceId, i => i);
                 Console.WriteLine($"✅ Loaded {existingInvoices.Count} existing invoices\n");
 
+                // ========================================
+                // STEP 5: Process and save invoices with customer references
+                // ========================================
                 int updatedCount = 0;
                 int newCount = 0;
-                int preservedCount = 0;
 
-                // ✅ FAST PROCESSING - No GetInvoiceDetails calls!
+                Console.WriteLine($"💾 Saving invoices with customer references...");
+
                 foreach (var transaction in qbTransactions)
                 {
-                    existingInvoices.TryGetValue(transaction.QuickBooksInvoiceId, out var existingInvoice);
-
-                    if (existingInvoice != null && existingInvoice.Status == "Uploaded")
+                    try
                     {
-                        // Already uploaded - preserve everything, no changes needed
-                        Console.WriteLine($"   ⏭️ {transaction.InvoiceNumber} - Already uploaded, skipping");
-                        preservedCount++;
-                        continue; // Don't even save - nothing changed
-                    }
-                    else if (existingInvoice != null)
-                    {
-                        // Exists but not uploaded - update basic info, preserve status
-                        transaction.Status = existingInvoice.Status;
-                        transaction.ErrorMessage = existingInvoice.ErrorMessage;
-                        transaction.Items = existingInvoice.Items; // Keep existing items
+                        // ✅ FIXED: Map customer to invoice
+                        if (customerMap.TryGetValue(transaction.QuickBooksCustomerId, out var customer))
+                        {
+                            transaction.CustomerId = customer.Id;
+                            transaction.Customer = customer;
+                            // ✅ That's it! The Invoice model's helper properties will handle the rest
+                        }
+                        else
+                        {
+                            Console.WriteLine($"⚠️ Customer not found for invoice {transaction.InvoiceNumber}");
+                            continue;
+                        }
 
-                        // Update header fields from QB (in case they changed)
-                        // But don't do expensive detail fetch
-                        Console.WriteLine($"   🔄 {transaction.InvoiceNumber} - Updating");
-                        updatedCount++;
-                    }
-                    else
-                    {
-                        // New invoice - save basic info
-                        transaction.Status = "Pending";
-                        Console.WriteLine($"   ✨ {transaction.InvoiceNumber} - New");
-                        newCount++;
-                    }
+                        // Check if invoice exists
+                        existingInvoices.TryGetValue(transaction.QuickBooksInvoiceId, out var existingInvoice);
 
-                    // Save basic invoice (without full item details)
-                    _db.SaveInvoice(transaction);
+                        if (existingInvoice != null)
+                        {
+                            // Preserve FBR-specific data
+                            transaction.Id = existingInvoice.Id;
+                            transaction.Status = existingInvoice.Status;
+                            transaction.FBR_IRN = existingInvoice.FBR_IRN;
+                            transaction.FBR_QRCode = existingInvoice.FBR_QRCode;
+                            transaction.UploadDate = existingInvoice.UploadDate;
+                            transaction.ErrorMessage = existingInvoice.ErrorMessage;
+
+                            // For uploaded invoices, preserve complete item details
+                            if (existingInvoice.Status == "Uploaded" && existingInvoice.Items != null && existingInvoice.Items.Count > 0)
+                            {
+                                transaction.Items = existingInvoice.Items;
+                            }
+
+                            Console.WriteLine($"   🔄 {transaction.InvoiceNumber} - Updated" +
+                                (existingInvoice.Status == "Uploaded" ? " (Uploaded)" :
+                                 existingInvoice.Status == "Failed" ? " (Failed)" : " (Pending)"));
+                            updatedCount++;
+                        }
+                        else
+                        {
+                            transaction.Status = "Pending";
+                            Console.WriteLine($"   ✨ {transaction.InvoiceNumber} - New");
+                            newCount++;
+                        }
+
+                        // Save to database with customer reference
+                        _db.SaveInvoice(transaction);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"❌ Error processing invoice {transaction.InvoiceNumber}: {ex.Message}");
+                    }
                 }
 
                 Console.WriteLine($"\n╔════════════════════════════════════════╗");
-                Console.WriteLine($"║       FAST FETCH SUMMARY               ║");
+                Console.WriteLine($"║       FETCH SUMMARY                    ║");
                 Console.WriteLine($"╚════════════════════════════════════════╝");
-                Console.WriteLine($"✨ New: {newCount}");
-                Console.WriteLine($"🔄 Updated: {updatedCount}");
-                Console.WriteLine($"📌 Preserved (uploaded): {preservedCount}");
+                Console.WriteLine($"👥 Customers: {customerMap.Count} processed");
+                Console.WriteLine($"✨ New Invoices: {newCount}");
+                Console.WriteLine($"🔄 Updated Invoices: {updatedCount}");
                 Console.WriteLine($"📝 Total: {qbTransactions.Count}");
-                Console.WriteLine($"⚡ NO detailed processing done - faster!");
+                Console.WriteLine($"💾 All data refreshed with normalized customers!");
                 Console.WriteLine($"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
                 return _db.GetInvoices(_qb.CurrentCompanyName);
@@ -142,20 +203,13 @@ namespace C2B_FBR_Connect.Managers
         }
 
         /// <summary>
-        /// Get full FBR payload for an invoice (with all processing)
+        /// Get full FBR payload for an invoice (always fetches fresh data)
         /// Called by UploadToFBR and ShowInvoiceDetailsAsync
         /// </summary>
         public async Task<FBRInvoicePayload> GetFullInvoicePayload(Invoice invoice)
         {
-            // Check cache first
-            if (_payloadCache.TryGetValue(invoice.QuickBooksInvoiceId, out var cachedPayload))
-            {
-                Console.WriteLine($"✅ Using cached payload for {invoice.InvoiceNumber}");
-                return cachedPayload;
-            }
-
-            // Fetch full details from QuickBooks (this does all the heavy processing)
-            Console.WriteLine($"🔍 Fetching full details for {invoice.InvoiceType ?? "Invoice"}: {invoice.InvoiceNumber}");
+            // Always fetch fresh details from QuickBooks
+            Console.WriteLine($"🔍 Fetching fresh details for {invoice.InvoiceType ?? "Invoice"}: {invoice.InvoiceNumber}");
 
             FBRInvoicePayload details = null;
 
@@ -172,9 +226,6 @@ namespace C2B_FBR_Connect.Managers
                 details.SellerProvince = _currentCompany?.SellerProvince ?? "";
                 details.SellerAddress = _currentCompany?.SellerAddress ?? "";
 
-                // Cache for reuse
-                _payloadCache[invoice.QuickBooksInvoiceId] = details;
-
                 Console.WriteLine($"✅ Retrieved {details.Items?.Count ?? 0} items");
             }
 
@@ -182,7 +233,7 @@ namespace C2B_FBR_Connect.Managers
         }
 
         /// <summary>
-        /// Upload invoice to FBR
+        /// Upload invoice to FBR (always fetches fresh data before upload)
         /// </summary>
         public async Task<FBRResponse> UploadToFBR(Invoice invoice, string token)
         {
@@ -192,7 +243,7 @@ namespace C2B_FBR_Connect.Managers
             {
                 ValidateUploadPrerequisites();
 
-                // Get full payload (uses cache if available)
+                // Get fresh payload from QuickBooks
                 var details = await GetFullInvoicePayload(invoice);
 
                 if (details == null)
@@ -221,12 +272,9 @@ namespace C2B_FBR_Connect.Managers
                     invoice.UploadDate = DateTime.Now;
                     invoice.ErrorMessage = null;
 
-                    // Save complete invoice with items
+                    // Save complete invoice with fresh items
                     _db.SaveInvoiceWithDetails(invoice);
                     Console.WriteLine($"✅ {invoice.InvoiceType ?? "Invoice"} {invoice.InvoiceNumber} uploaded successfully (IRN: {response.IRN})");
-
-                    // Remove from cache
-                    _payloadCache.Remove(invoice.QuickBooksInvoiceId);
 
                     // Generate PDF
                     _ = GeneratePDFAsync(invoice);
@@ -324,17 +372,35 @@ namespace C2B_FBR_Connect.Managers
 
         private void MapPayloadToInvoice(Invoice invoice, FBRInvoicePayload details)
         {
+            // ✅ FIXED: Load customer if not already loaded
+            if (invoice.Customer == null && invoice.CustomerId > 0)
+            {
+                invoice.Customer = _db.GetCustomerById(invoice.CustomerId);
+            }
+
+            if (invoice.Customer == null)
+                throw new Exception("Customer not loaded for invoice");
+
+            // Update invoice fields
             invoice.TotalAmount = details.TotalAmount;
             invoice.TaxAmount = details.TaxAmount;
             invoice.DiscountAmount = details.Items?.Sum(i => i.Discount) ?? 0;
             invoice.InvoiceDate = details.InvoiceDate;
-            invoice.CustomerAddress = details.BuyerAddress;
-            invoice.CustomerPhone = details.BuyerPhone;
-            invoice.CustomerNTN = details.CustomerNTN;
-            invoice.CustomerType = details.BuyerRegistrationType;
-            invoice.CustomerEmail = details.BuyerEmail ?? "";
             invoice.PaymentMode = "Cash";
 
+            // ✅ FIXED: Update customer record with fresh data from QuickBooks
+            var customer = invoice.Customer;
+            customer.CustomerAddress = details.BuyerAddress;
+            customer.CustomerPhone = details.BuyerPhone;
+            customer.CustomerNTN = details.CustomerNTN;
+            customer.CustomerType = details.BuyerRegistrationType;
+            customer.CustomerEmail = details.BuyerEmail ?? "";
+            customer.ModifiedDate = DateTime.Now;
+
+            // Save updated customer to database
+            _db.UpdateCustomer(customer);
+
+            // Map items
             invoice.Items = details.Items?.Select(i => new InvoiceItem
             {
                 ItemName = i.ItemName ?? "",

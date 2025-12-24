@@ -186,7 +186,7 @@ namespace C2B_FBR_Connect.Forms
             // Default to last 30 days
             dtpTo.Value = DateTime.Today;
             dtpFrom.Value = DateTime.Today.AddDays(-30);
-            cboQuickSelect.SelectedIndex = 5; // "Last 30 Days"
+            cboQuickSelect.SelectedIndex = 1;
         }
 
         private void CboQuickSelect_SelectedIndexChanged(object sender, EventArgs e)
