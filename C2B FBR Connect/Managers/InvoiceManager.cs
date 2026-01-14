@@ -233,80 +233,120 @@ namespace C2B_FBR_Connect.Managers
         }
 
         /// <summary>
-        /// Upload invoice to FBR (always fetches fresh data before upload)
+        /// Upload invoice to FBR with database-level duplicate prevention
+        /// Thread-safe across multiple app instances
         /// </summary>
         public async Task<FBRResponse> UploadToFBR(Invoice invoice, string token)
         {
             var result = new FBRResponse();
+            string companyName = _currentCompany?.CompanyName;
 
             try
             {
                 ValidateUploadPrerequisites();
 
-                // Get fresh payload from QuickBooks
-                var details = await GetFullInvoicePayload(invoice);
+                // ========================================
+                // CRITICAL: Atomic lock acquisition in database
+                // ========================================
+                var lockResult = _db.TryLockInvoiceForUpload(invoice.QuickBooksInvoiceId, companyName);
 
-                if (details == null)
+                if (!lockResult.Success)
                 {
                     result.Success = false;
-                    result.ErrorMessage = $"Could not retrieve {invoice.InvoiceType ?? "invoice"} details from QuickBooks";
-                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, result.ErrorMessage);
+                    result.ErrorMessage = lockResult.Message;
+                    Console.WriteLine($"⚠️ {result.ErrorMessage}");
                     return result;
                 }
 
-                // Map payload to invoice for database storage
-                MapPayloadToInvoice(invoice, details);
+                Console.WriteLine($"🔒 Upload lock acquired for invoice {invoice.InvoiceNumber}");
 
-                string environment = _currentCompany?.Environment ?? "Sandbox";
-
-                // Call FBR API
-                Console.WriteLine($"📤 Uploading {invoice.InvoiceType ?? "Invoice"} to FBR...");
-                var response = await _fbr.UploadInvoice(details, token, environment);
-                result = response;
-
-                if (response.Success)
+                try
                 {
-                    invoice.FBR_IRN = response.IRN;
-                    invoice.FBR_QRCode = response.IRN;
-                    invoice.Status = "Uploaded";
-                    invoice.UploadDate = DateTime.Now;
-                    invoice.ErrorMessage = null;
+                    // Get fresh payload from QuickBooks
+                    var details = await GetFullInvoicePayload(invoice);
 
-                    // Save complete invoice with fresh items
-                    _db.SaveInvoiceWithDetails(invoice);
-                    Console.WriteLine($"✅ {invoice.InvoiceType ?? "Invoice"} {invoice.InvoiceNumber} uploaded successfully (IRN: {response.IRN})");
+                    if (details == null)
+                    {
+                        result.Success = false;
+                        result.ErrorMessage = $"Could not retrieve {invoice.InvoiceType ?? "invoice"} details from QuickBooks";
+                        _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, result.ErrorMessage);
+                        return result;
+                    }
 
-                    // Generate PDF
-                    _ = GeneratePDFAsync(invoice);
+                    // Map payload to invoice for database storage
+                    MapPayloadToInvoice(invoice, details);
+
+                    string environment = _currentCompany?.Environment ?? "Sandbox";
+
+                    // Call FBR API
+                    Console.WriteLine($"📤 Uploading {invoice.InvoiceType ?? "Invoice"} to FBR...");
+                    var response = await _fbr.UploadInvoice(details, token, environment);
+                    result = response;
+
+                    if (response.Success)
+                    {
+                        invoice.FBR_IRN = response.IRN;
+                        invoice.FBR_QRCode = response.IRN;
+                        invoice.Status = "Uploaded";
+                        invoice.UploadDate = DateTime.Now;
+                        invoice.ErrorMessage = null;
+
+                        // Save complete invoice with fresh items
+                        _db.SaveInvoiceWithDetails(invoice);
+                        Console.WriteLine($"✅ {invoice.InvoiceType ?? "Invoice"} {invoice.InvoiceNumber} uploaded successfully (IRN: {response.IRN})");
+
+                        // Generate PDF
+                        _ = GeneratePDFAsync(invoice);
+                    }
+                    else
+                    {
+                        invoice.Status = "Failed";
+                        invoice.ErrorMessage = response.ErrorMessage;
+                        _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, response.ErrorMessage);
+                        Console.WriteLine($"❌ Upload failed: {response.ErrorMessage}");
+                    }
+
+                    return result;
                 }
-                else
+                catch (Exception ex)
                 {
-                    invoice.Status = "Failed";
-                    invoice.ErrorMessage = response.ErrorMessage;
-                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, response.ErrorMessage);
-                    Console.WriteLine($"❌ Upload failed: {response.ErrorMessage}");
+                    // On exception, mark as failed so it can be retried
+                    result.Success = false;
+                    result.ErrorMessage = ex.Message;
+                    _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, $"Exception: {ex.Message}");
+                    Console.WriteLine($"❌ Exception during upload: {ex.Message}");
+                    return result;
                 }
-
-                return result;
             }
             catch (Exception ex)
             {
                 result.Success = false;
                 result.ErrorMessage = ex.Message;
-                _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Failed", null, $"Exception: {ex.Message}");
-                Console.WriteLine($"❌ Exception during upload: {ex.Message}");
+                Console.WriteLine($"❌ Exception: {ex.Message}");
                 return result;
             }
         }
 
         /// <summary>
-        /// Upload multiple invoices
+        /// Upload multiple invoices (with duplicate prevention)
         /// </summary>
         public async Task<Dictionary<string, FBRResponse>> UploadMultipleToFBR(List<Invoice> invoices, string token)
         {
             var results = new Dictionary<string, FBRResponse>();
 
-            foreach (var invoice in invoices)
+            // Pre-filter already uploaded invoices (UI optimization)
+            var invoicesToUpload = invoices.Where(i =>
+                i.Status != "Uploaded" &&
+                i.Status != "Uploading" &&
+                string.IsNullOrEmpty(i.FBR_IRN)).ToList();
+
+            var skippedCount = invoices.Count - invoicesToUpload.Count;
+            if (skippedCount > 0)
+            {
+                Console.WriteLine($"⏭️ Skipping {skippedCount} already uploaded/uploading invoices");
+            }
+
+            foreach (var invoice in invoicesToUpload)
             {
                 var response = await UploadToFBR(invoice, token);
                 results[invoice.InvoiceNumber] = response;
@@ -366,6 +406,21 @@ namespace C2B_FBR_Connect.Managers
             }
 
             return successCount;
+        }
+
+        /// <summary>
+        /// Reset stuck "Uploading" invoices back to "Pending"
+        /// Call this on app startup to handle crashed uploads
+        /// </summary>
+        public int ResetStuckUploads(TimeSpan? maxUploadDuration = null)
+        {
+            if (_currentCompany == null)
+                return 0;
+
+            return _db.ResetStuckUploadingInvoices(
+                _currentCompany.CompanyName,
+                maxUploadDuration ?? TimeSpan.FromMinutes(5)
+            );
         }
 
         #region Private Helper Methods

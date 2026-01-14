@@ -20,7 +20,7 @@ namespace C2B_FBR_Connect.Forms
         #region Fields
 
         private DataGridView dgvInvoices;
-        private Button btnFetchInvoices, btnUploadSelected, btnGeneratePDF, btnCompanySetup, btnRefresh;
+        private Button btnFetchInvoices, btnUploadSelected, btnGeneratePDF, btnCompanySetup, btnArchiveSelected;
         private Label lblCompanyName, lblFilter, lblSearch, lblEnvironment;
         private ComboBox cboStatusFilter;
         private TextBox txtSearchInvoice;
@@ -29,6 +29,7 @@ namespace C2B_FBR_Connect.Forms
         private ToolStripProgressBar progressBar;
         private Panel topPanel, buttonPanel, filterPanel;
         private PictureBox picCompanyLogo;
+        private ContextMenuStrip invoiceContextMenu;
 
         private readonly DatabaseService _db;
         private readonly QuickBooksService _qb;
@@ -48,13 +49,14 @@ namespace C2B_FBR_Connect.Forms
         private const int DEBOUNCE_DELAY_MS = 300;
 
         // Colors
-        private readonly Color PrimaryColor = Color.FromArgb(45, 62, 80);      // Dark blue-gray
-        private readonly Color SecondaryColor = Color.FromArgb(52, 152, 219);  // Blue
-        private readonly Color SuccessColor = Color.FromArgb(46, 204, 113);    // Green
-        private readonly Color WarningColor = Color.FromArgb(241, 196, 15);    // Yellow
-        private readonly Color DangerColor = Color.FromArgb(231, 76, 60);      // Red
-        private readonly Color LightBgColor = Color.FromArgb(248, 249, 250);   // Light gray
-        private readonly Color BorderColor = Color.FromArgb(222, 226, 230);    // Border gray
+        private readonly Color PrimaryColor = Color.FromArgb(45, 62, 80);
+        private readonly Color SecondaryColor = Color.FromArgb(52, 152, 219);
+        private readonly Color SuccessColor = Color.FromArgb(46, 204, 113);
+        private readonly Color WarningColor = Color.FromArgb(241, 196, 15);
+        private readonly Color DangerColor = Color.FromArgb(231, 76, 60);
+        private readonly Color LightBgColor = Color.FromArgb(248, 249, 250);
+        private readonly Color BorderColor = Color.FromArgb(222, 226, 230);
+        private readonly Color ArchiveColor = Color.FromArgb(108, 117, 125);
 
         #endregion
 
@@ -75,6 +77,7 @@ namespace C2B_FBR_Connect.Forms
 
             InitializeSearchDebouncer();
             SetupCustomUI();
+            CreateContextMenu();
             ConnectToQuickBooks();
 
             this.FormClosing += MainForm_FormClosing;
@@ -101,7 +104,6 @@ namespace C2B_FBR_Connect.Forms
             CreateDataGridView();
             CreateStatusStrip();
 
-            // Add controls in correct order (bottom to top for docking)
             Controls.Add(dgvInvoices);
             Controls.Add(filterPanel);
             Controls.Add(buttonPanel);
@@ -137,7 +139,6 @@ namespace C2B_FBR_Connect.Forms
                 Padding = new Padding(15, 12, 15, 12)
             };
 
-            // Company Logo
             picCompanyLogo = new PictureBox
             {
                 Location = new Point(15, 10),
@@ -147,7 +148,6 @@ namespace C2B_FBR_Connect.Forms
                 BackColor = Color.Transparent
             };
 
-            // Company Name Label
             lblCompanyName = new Label
             {
                 Text = "No QuickBooks Company Connected",
@@ -161,7 +161,6 @@ namespace C2B_FBR_Connect.Forms
                 Anchor = AnchorStyles.Top | AnchorStyles.Left
             };
 
-            // Environment Badge
             lblEnvironment = new Label
             {
                 Text = "SANDBOX",
@@ -174,7 +173,6 @@ namespace C2B_FBR_Connect.Forms
                 Visible = false
             };
 
-            // Company Setup button in header
             var btnHeaderSetup = new Button
             {
                 Text = "⚙ Settings",
@@ -208,7 +206,6 @@ namespace C2B_FBR_Connect.Forms
                 Padding = new Padding(15, 12, 15, 12)
             };
 
-            // Add subtle bottom border
             buttonPanel.Paint += (s, e) =>
             {
                 using (var pen = new Pen(BorderColor, 1))
@@ -229,16 +226,21 @@ namespace C2B_FBR_Connect.Forms
             btnFetchInvoices = CreateStyledButton("📥 Fetch Invoices", ref currentX, btnY, 140, SecondaryColor, btnSpacing);
             btnFetchInvoices.Click += async (s, e) => await BtnFetchInvoices_ClickAsync();
 
-            btnRefresh = CreateStyledButton("🔄 Refresh", ref currentX, btnY, 100, Color.FromArgb(108, 117, 125), btnSpacing);
-            btnRefresh.Click += (s, e) => _ = LoadInvoicesAsync();
+            // Separator
+            currentX += 10;
 
-            btnUploadSelected = CreateStyledButton("📤 Upload Selected", ref currentX, btnY, 150, SuccessColor, btnSpacing);
+            btnUploadSelected = CreateStyledButton("📤 Upload", ref currentX, btnY, 110, SuccessColor, btnSpacing);
             btnUploadSelected.Click += async (s, e) => await BtnUploadSelected_ClickAsync();
+            btnUploadSelected.Enabled = false;
 
             btnGeneratePDF = CreateStyledButton("📄 Generate PDF", ref currentX, btnY, 130, Color.FromArgb(155, 89, 182), btnSpacing);
             btnGeneratePDF.Click += BtnGeneratePDF_Click;
+            btnGeneratePDF.Enabled = false;
 
-            // Hidden - moved to header
+            btnArchiveSelected = CreateStyledButton("📦 Archive", ref currentX, btnY, 110, ArchiveColor, btnSpacing);
+            btnArchiveSelected.Click += async (s, e) => await BtnArchiveSelected_ClickAsync();
+            btnArchiveSelected.Enabled = false;
+
             btnCompanySetup = new Button { Visible = false };
         }
 
@@ -260,8 +262,6 @@ namespace C2B_FBR_Connect.Forms
             button.FlatAppearance.BorderSize = 0;
             button.FlatAppearance.MouseOverBackColor = ControlPaint.Dark(backColor, 0.1f);
             button.FlatAppearance.MouseDownBackColor = ControlPaint.Dark(backColor, 0.2f);
-
-            // Rounded corners effect via region (optional - works on some systems)
             button.Region = CreateRoundedRegion(button.Width, button.Height, 4);
 
             buttonPanel.Controls.Add(button);
@@ -292,7 +292,6 @@ namespace C2B_FBR_Connect.Forms
                 Padding = new Padding(15, 10, 15, 10)
             };
 
-            // Filter Label
             lblFilter = new Label
             {
                 Text = "Status:",
@@ -302,7 +301,6 @@ namespace C2B_FBR_Connect.Forms
                 ForeColor = Color.FromArgb(73, 80, 87)
             };
 
-            // Status Filter Dropdown
             cboStatusFilter = new ComboBox
             {
                 Location = new Point(65, 11),
@@ -311,11 +309,10 @@ namespace C2B_FBR_Connect.Forms
                 Font = new Font("Segoe UI", 9F),
                 BackColor = Color.White
             };
-            cboStatusFilter.Items.AddRange(new object[] { "All", "Pending", "Uploaded", "Failed" });
+            cboStatusFilter.Items.AddRange(new object[] { "All", "Pending", "Uploaded", "Failed", "Archived" });
             cboStatusFilter.SelectedIndex = 0;
             cboStatusFilter.SelectedIndexChanged += (s, e) => _ = ApplyFiltersAsync();
 
-            // Search Label
             lblSearch = new Label
             {
                 Text = "Search:",
@@ -325,7 +322,6 @@ namespace C2B_FBR_Connect.Forms
                 ForeColor = Color.FromArgb(73, 80, 87)
             };
 
-            // Search TextBox with placeholder
             txtSearchInvoice = new TextBox
             {
                 Location = new Point(265, 11),
@@ -335,7 +331,6 @@ namespace C2B_FBR_Connect.Forms
             };
             txtSearchInvoice.TextChanged += OnSearchTextChanged;
 
-            // Add placeholder behavior
             txtSearchInvoice.Text = "Invoice # or Customer Name...";
             txtSearchInvoice.ForeColor = Color.Gray;
             txtSearchInvoice.GotFocus += (s, e) =>
@@ -355,7 +350,6 @@ namespace C2B_FBR_Connect.Forms
                 }
             };
 
-            // Record count label (right side)
             var lblRecordCount = new Label
             {
                 Name = "lblRecordCount",
@@ -368,6 +362,172 @@ namespace C2B_FBR_Connect.Forms
             };
 
             filterPanel.Controls.AddRange(new Control[] { lblFilter, cboStatusFilter, lblSearch, txtSearchInvoice, lblRecordCount });
+        }
+
+        private void CreateContextMenu()
+        {
+            invoiceContextMenu = new ContextMenuStrip();
+            invoiceContextMenu.Font = new Font("Segoe UI", 9F);
+            invoiceContextMenu.BackColor = Color.White;
+            invoiceContextMenu.ShowImageMargin = true;
+            invoiceContextMenu.RenderMode = ToolStripRenderMode.System;
+
+            // View Details
+            var viewDetailsItem = new ToolStripMenuItem("👁  View Details", null, OnContextViewDetails);
+            viewDetailsItem.Name = "viewDetails";
+
+            // Separator
+            var separator1 = new ToolStripSeparator();
+
+            // Upload to FBR
+            var uploadItem = new ToolStripMenuItem("📤  Upload to FBR", null, OnContextUpload);
+            uploadItem.Name = "upload";
+
+            // Generate PDF
+            var generatePdfItem = new ToolStripMenuItem("📄  Generate PDF", null, OnContextGeneratePDF);
+            generatePdfItem.Name = "generatePdf";
+
+            // Separator
+            var separator2 = new ToolStripSeparator();
+
+            // Archive
+            var archiveItem = new ToolStripMenuItem("📦  Archive", null, OnContextArchive);
+            archiveItem.Name = "archive";
+
+            // Unarchive
+            var unarchiveItem = new ToolStripMenuItem("📂  Unarchive", null, OnContextUnarchive);
+            unarchiveItem.Name = "unarchive";
+
+            invoiceContextMenu.Items.AddRange(new ToolStripItem[]
+            {
+                viewDetailsItem, separator1, uploadItem, generatePdfItem, separator2, archiveItem, unarchiveItem
+            });
+
+            invoiceContextMenu.Opening += ContextMenu_Opening;
+        }
+
+        private void ContextMenu_Opening(object sender, System.ComponentModel.CancelEventArgs e)
+        {
+            var selectedInvoices = GetSelectedRowInvoices();
+
+            if (selectedInvoices.Count == 0)
+            {
+                e.Cancel = true;
+                return;
+            }
+
+            bool hasMultiple = selectedInvoices.Count > 1;
+            bool hasPending = selectedInvoices.Any(i => i.Status == "Pending" || i.Status == "Failed");
+            bool hasUploaded = selectedInvoices.Any(i => i.Status == "Uploaded");
+            bool hasArchived = selectedInvoices.Any(i => i.Status == "Archived");
+            bool allArchived = selectedInvoices.All(i => i.Status == "Archived");
+
+            // View Details - only for single selection
+            var viewDetailsItem = invoiceContextMenu.Items["viewDetails"];
+            if (viewDetailsItem != null)
+            {
+                viewDetailsItem.Visible = !hasMultiple;
+                viewDetailsItem.Text = "👁  View Details";
+            }
+
+            // First separator
+            invoiceContextMenu.Items[1].Visible = !hasMultiple;
+
+            // Upload - enabled if any pending/failed and not archived
+            var uploadItem = invoiceContextMenu.Items["upload"];
+            if (uploadItem != null)
+            {
+                uploadItem.Enabled = hasPending && !hasArchived;
+                int uploadCount = selectedInvoices.Count(i => i.Status == "Pending" || i.Status == "Failed");
+                uploadItem.Text = hasMultiple ? $"📤  Upload ({uploadCount})" : "📤  Upload to FBR";
+            }
+
+            // Generate PDF - enabled if any uploaded
+            var generatePdfItem = invoiceContextMenu.Items["generatePdf"];
+            if (generatePdfItem != null)
+            {
+                generatePdfItem.Enabled = hasUploaded;
+                int pdfCount = selectedInvoices.Count(i => i.Status == "Uploaded");
+                generatePdfItem.Text = hasMultiple ? $"📄  Generate PDF ({pdfCount})" : "📄  Generate PDF";
+            }
+
+            // Archive - visible if not all archived
+            var archiveItem = invoiceContextMenu.Items["archive"];
+            if (archiveItem != null)
+            {
+                archiveItem.Visible = !allArchived;
+                int archiveCount = selectedInvoices.Count(i => i.Status != "Archived");
+                archiveItem.Text = hasMultiple ? $"📦  Archive ({archiveCount})" : "📦  Archive";
+            }
+
+            // Unarchive - visible if any archived
+            var unarchiveItem = invoiceContextMenu.Items["unarchive"];
+            if (unarchiveItem != null)
+            {
+                unarchiveItem.Visible = hasArchived;
+                int unarchiveCount = selectedInvoices.Count(i => i.Status == "Archived");
+                unarchiveItem.Text = hasMultiple ? $"📂  Unarchive ({unarchiveCount})" : "📂  Unarchive";
+            }
+        }
+
+        private List<Invoice> GetSelectedRowInvoices()
+        {
+            var invoices = new List<Invoice>();
+            foreach (DataGridViewRow row in dgvInvoices.SelectedRows)
+            {
+                if (row.DataBoundItem is Invoice invoice)
+                    invoices.Add(invoice);
+            }
+            return invoices;
+        }
+
+        private async void OnContextViewDetails(object sender, EventArgs e)
+        {
+            var invoices = GetSelectedRowInvoices();
+            if (invoices.Count == 1)
+                await ShowInvoiceDetailsAsync(invoices[0]);
+        }
+
+        private async void OnContextUpload(object sender, EventArgs e)
+        {
+            var invoices = GetSelectedRowInvoices()
+                .Where(i => i.Status == "Pending" || i.Status == "Failed")
+                .ToList();
+
+            if (invoices.Count > 0)
+                await UploadInvoicesAsync(invoices);
+        }
+
+        private void OnContextGeneratePDF(object sender, EventArgs e)
+        {
+            var invoices = GetSelectedRowInvoices()
+                .Where(i => i.Status == "Uploaded")
+                .ToList();
+
+            if (invoices.Count == 1)
+                GeneratePDF(invoices[0]);
+            else if (invoices.Count > 1)
+                GenerateMultiplePDFs(invoices);
+        }
+
+        private async void OnContextArchive(object sender, EventArgs e)
+        {
+            var invoices = GetSelectedRowInvoices()
+                .Where(i => i.Status != "Archived")
+                .ToList();
+
+            if (invoices.Count > 0)
+                await ArchiveInvoicesAsync(invoices);
+        }
+
+        private async void OnContextUnarchive(object sender, EventArgs e)
+        {
+            var invoices = GetSelectedRowInvoices()
+                .Where(i => i.Status == "Archived")
+                .ToList();
+
+            if (invoices.Count > 0)
+                await UnarchiveInvoicesAsync(invoices);
         }
 
         private void CreateDataGridView()
@@ -393,9 +553,9 @@ namespace C2B_FBR_Connect.Forms
                 EnableHeadersVisualStyles = false,
                 CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
                 Margin = new Padding(15, 5, 15, 5)
+                // Context menu will be shown manually via CellMouseClick
             };
 
-            // Header style
             dgvInvoices.ColumnHeadersDefaultCellStyle = new DataGridViewCellStyle
             {
                 BackColor = Color.FromArgb(248, 249, 250),
@@ -407,7 +567,6 @@ namespace C2B_FBR_Connect.Forms
                 SelectionForeColor = Color.FromArgb(33, 37, 41)
             };
 
-            // Default cell style
             dgvInvoices.DefaultCellStyle = new DataGridViewCellStyle
             {
                 Padding = new Padding(8, 4, 8, 4),
@@ -415,7 +574,6 @@ namespace C2B_FBR_Connect.Forms
                 SelectionForeColor = Color.Black
             };
 
-            // Alternating row style
             dgvInvoices.AlternatingRowsDefaultCellStyle = new DataGridViewCellStyle
             {
                 BackColor = Color.FromArgb(252, 252, 253),
@@ -424,11 +582,32 @@ namespace C2B_FBR_Connect.Forms
             };
 
             dgvInvoices.CellContentClick += DgvInvoices_CellContentClick;
-            dgvInvoices.CellDoubleClick += DgvInvoices_CellDoubleClick;
             dgvInvoices.ColumnHeaderMouseClick += DgvInvoices_ColumnHeaderMouseClick;
             dgvInvoices.CurrentCellDirtyStateChanged += DgvInvoices_CurrentCellDirtyStateChanged;
             dgvInvoices.CellFormatting += DgvInvoices_CellFormatting;
+            dgvInvoices.CellMouseClick += DgvInvoices_CellMouseClick;
             dgvInvoices.DoubleBuffered(true);
+        }
+
+        private void DgvInvoices_CellMouseClick(object sender, DataGridViewCellMouseEventArgs e)
+        {
+            // Handle right-click for context menu
+            if (e.Button == MouseButtons.Right && e.RowIndex >= 0)
+            {
+                // If clicked row is not selected, clear selection and select only the clicked row
+                if (!dgvInvoices.Rows[e.RowIndex].Selected)
+                {
+                    dgvInvoices.ClearSelection();
+                    dgvInvoices.Rows[e.RowIndex].Selected = true;
+                }
+
+                // Get the cell rectangle to position the context menu
+                var cellRect = dgvInvoices.GetCellDisplayRectangle(e.ColumnIndex, e.RowIndex, true);
+                var menuLocation = dgvInvoices.PointToScreen(new Point(cellRect.Left + e.X, cellRect.Top + e.Y));
+
+                // Show context menu
+                invoiceContextMenu.Show(menuLocation);
+            }
         }
 
         private void DgvInvoices_CellFormatting(object sender, DataGridViewCellFormattingEventArgs e)
@@ -454,10 +633,14 @@ namespace C2B_FBR_Connect.Forms
                         cell.Style.ForeColor = Color.FromArgb(108, 117, 125);
                         e.Value = "○ Pending";
                         break;
+                    case "Archived":
+                        cell.Style.ForeColor = ArchiveColor;
+                        cell.Style.Font = new Font("Segoe UI", 9F, FontStyle.Italic);
+                        e.Value = "📦 Archived";
+                        break;
                 }
             }
 
-            // Format Type column
             if (dgvInvoices.Columns[e.ColumnIndex].Name == "InvoiceType" && e.Value != null)
             {
                 var type = e.Value.ToString();
@@ -487,7 +670,6 @@ namespace C2B_FBR_Connect.Forms
                 Padding = new Padding(10, 0, 10, 0)
             };
 
-            // Add top border
             statusStrip.Paint += (s, e) =>
             {
                 using (var pen = new Pen(BorderColor, 1))
@@ -504,7 +686,7 @@ namespace C2B_FBR_Connect.Forms
                 ForeColor = Color.FromArgb(73, 80, 87)
             };
 
-            statusStats = new ToolStripStatusLabel("Total: 0 | Pending: 0 | Uploaded: 0 | Failed: 0")
+            statusStats = new ToolStripStatusLabel("Total: 0 | Pending: 0 | Uploaded: 0 | Failed: 0 | Archived: 0")
             {
                 BorderSides = ToolStripStatusLabelBorderSides.Left,
                 Padding = new Padding(15, 0, 10, 0),
@@ -549,6 +731,26 @@ namespace C2B_FBR_Connect.Forms
                     _qb.Connect(_currentCompany);
                     _qb.SetSroDataService(_sroDataService);
                     _invoiceManager.SetCompany(_currentCompany);
+
+                    var stuckInvoices = _db.GetInvoicesByStatus(_currentCompany.CompanyName, "Uploading");
+                    if (stuckInvoices.Count > 0)
+                    {
+                        var result = MessageBox.Show(
+                            $"Found {stuckInvoices.Count} invoice(s) that were uploading when the app last closed.\n\n" +
+                            "These may have been uploaded to FBR but not confirmed.\n\n" +
+                            "• Click YES to reset them to Pending (you can retry upload)\n" +
+                            "• Click NO to mark them as Failed (check FBR portal manually)\n" +
+                            "• Click CANCEL to leave them as-is",
+                            "Incomplete Uploads Detected",
+                            MessageBoxButtons.YesNoCancel,
+                            MessageBoxIcon.Warning
+                        );
+
+                        if (result == DialogResult.Yes)
+                            _invoiceManager.ResetStuckUploads();
+                        else if (result == DialogResult.No)
+                            _db.MarkStuckUploadsAsFailed(_currentCompany.CompanyName);
+                    }
 
                     LoadCompanyLogo();
                     UpdateEnvironmentBadge();
@@ -662,7 +864,6 @@ namespace C2B_FBR_Connect.Forms
 
         private void OnSearchTextChanged(object sender, EventArgs e)
         {
-            // Ignore placeholder text
             if (txtSearchInvoice.Text == "Invoice # or Customer Name...")
                 return;
 
@@ -683,7 +884,6 @@ namespace C2B_FBR_Connect.Forms
                 var statusFilter = cboStatusFilter.SelectedItem?.ToString();
                 var searchText = txtSearchInvoice.Text.Trim();
 
-                // Ignore placeholder
                 if (searchText == "Invoice # or Customer Name...")
                     searchText = "";
 
@@ -710,7 +910,6 @@ namespace C2B_FBR_Connect.Forms
 
                 UpdateDataGridView(filtered);
 
-                // Update record count
                 var lblRecordCount = filterPanel.Controls.Find("lblRecordCount", false).FirstOrDefault() as Label;
                 if (lblRecordCount != null)
                 {
@@ -730,11 +929,16 @@ namespace C2B_FBR_Connect.Forms
 
             try
             {
+                // Sort by created date descending (newest first)
+                var sortedInvoices = invoices?.OrderByDescending(i => i.CreatedDate)
+                              .ThenByDescending(i => i.Id)
+                              .ToList();
+
                 dgvInvoices.DataSource = null;
                 dgvInvoices.Columns.Clear();
-                dgvInvoices.DataSource = invoices;
+                dgvInvoices.DataSource = sortedInvoices;
 
-                FormatDataGridView(invoices);
+                FormatDataGridView(sortedInvoices);
             }
             finally
             {
@@ -759,7 +963,8 @@ namespace C2B_FBR_Connect.Forms
             statusStats.Text = $"Total: {_allInvoices.Count}  |  " +
                               $"Pending: {stats.GetValueOrDefault("Pending", 0)}  |  " +
                               $"Uploaded: {stats.GetValueOrDefault("Uploaded", 0)}  |  " +
-                              $"Failed: {stats.GetValueOrDefault("Failed", 0)}";
+                              $"Failed: {stats.GetValueOrDefault("Failed", 0)}  |  " +
+                              $"Archived: {stats.GetValueOrDefault("Archived", 0)}";
         }
 
         #endregion
@@ -770,16 +975,13 @@ namespace C2B_FBR_Connect.Forms
         {
             if (invoices == null) return;
 
-            // First hide all columns
             foreach (DataGridViewColumn col in dgvInvoices.Columns)
             {
                 col.Visible = false;
             }
 
-            // Add checkbox column first
             AddCheckboxColumn();
 
-            // Define column order and configuration
             var columnConfig = new List<(string Name, string Header, int FillWeight, bool Visible, DataGridViewContentAlignment? Align, string Format)>
             {
                 ("Select", "☐", 4, true, DataGridViewContentAlignment.MiddleCenter, null),
@@ -813,7 +1015,6 @@ namespace C2B_FBR_Connect.Forms
                     if (config.Align.HasValue)
                         column.DefaultCellStyle.Alignment = config.Align.Value;
 
-                    // Special styling for specific columns
                     if (config.Name == "InvoiceNumber")
                     {
                         column.DefaultCellStyle.Font = new Font("Segoe UI Semibold", 9F);
@@ -871,32 +1072,6 @@ namespace C2B_FBR_Connect.Forms
 
         #endregion
 
-        #region Sorting
-
-        private void SortDataGridView(string columnName)
-        {
-            var dataSource = dgvInvoices.DataSource as List<Invoice>;
-            if (dataSource == null || dataSource.Count == 0) return;
-
-            var sorted = columnName switch
-            {
-                "InvoiceType" => dataSource.OrderBy(i => i.InvoiceType).ToList(),
-                "InvoiceNumber" => dataSource.OrderBy(i => i.InvoiceNumber).ToList(),
-                "CustomerName" => dataSource.OrderBy(i => i.CustomerName).ToList(),
-                "CustomerNTN" => dataSource.OrderBy(i => i.CustomerNTN).ToList(),
-                "Amount" => dataSource.OrderByDescending(i => i.Amount).ToList(),
-                "Status" => dataSource.OrderBy(i => i.Status).ToList(),
-                "FBR_IRN" => dataSource.OrderBy(i => i.FBR_IRN).ToList(),
-                "UploadDate" => dataSource.OrderByDescending(i => i.UploadDate).ToList(),
-                "ErrorMessage" => dataSource.OrderBy(i => i.ErrorMessage).ToList(),
-                _ => dataSource
-            };
-
-            UpdateDataGridView(sorted);
-        }
-
-        #endregion
-
         #region Event Handlers
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
@@ -928,6 +1103,7 @@ namespace C2B_FBR_Connect.Forms
                         _selectedInvoiceIds.Remove(invoice.Id);
 
                     UpdateSelectedCount();
+                    UpdateActionButtonStates();
                 }
             }
         }
@@ -940,18 +1116,11 @@ namespace C2B_FBR_Connect.Forms
             }
         }
 
-        private void DgvInvoices_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
-        {
-            if (e.RowIndex >= 0 && dgvInvoices.Rows[e.RowIndex].DataBoundItem is Invoice invoice)
-                _ = ShowInvoiceDetailsAsync(invoice);
-        }
-
         private void DgvInvoices_ColumnHeaderMouseClick(object sender, DataGridViewCellMouseEventArgs e)
         {
+            // Only handle Select All toggle, no sorting (always sorted by invoice number)
             if (dgvInvoices.Columns[e.ColumnIndex].Name == "Select")
                 ToggleSelectAll();
-            else
-                SortDataGridView(dgvInvoices.Columns[e.ColumnIndex].Name);
         }
 
         #endregion
@@ -970,6 +1139,7 @@ namespace C2B_FBR_Connect.Forms
                 try
                 {
                     _selectedInvoiceIds.Clear();
+                    UpdateActionButtonStates();
 
                     var dateFrom = dateRangeDialog.DateFrom;
                     var dateTo = dateRangeDialog.DateTo;
@@ -1026,24 +1196,20 @@ namespace C2B_FBR_Connect.Forms
                 return;
             }
 
-            await UploadInvoicesAsync(checkedInvoices);
+            // Filter out archived invoices
+            var uploadableInvoices = checkedInvoices.Where(i => i.Status != "Archived").ToList();
+            if (uploadableInvoices.Count == 0)
+            {
+                ShowWarning("Selected invoices are archived. Unarchive them first to upload.", "Cannot Upload");
+                return;
+            }
+
+            await UploadInvoicesAsync(uploadableInvoices);
         }
 
         private void BtnGeneratePDF_Click(object sender, EventArgs e)
         {
             var checkedInvoices = GetCheckedInvoices().Where(i => i.Status == "Uploaded").ToList();
-
-            if (checkedInvoices.Count == 0)
-            {
-                if (dgvInvoices.SelectedRows.Count > 0)
-                {
-                    var selectedInvoice = dgvInvoices.SelectedRows[0].DataBoundItem as Invoice;
-                    if (selectedInvoice != null && selectedInvoice.Status == "Uploaded")
-                    {
-                        checkedInvoices.Add(selectedInvoice);
-                    }
-                }
-            }
 
             if (checkedInvoices.Count == 0)
             {
@@ -1054,7 +1220,7 @@ namespace C2B_FBR_Connect.Forms
                 }
                 else
                 {
-                    ShowWarning("Please select uploaded invoice(s) using checkboxes or row selection to generate PDF.", "No Selection");
+                    ShowWarning("Please select uploaded invoice(s) using checkboxes to generate PDF.", "No Selection");
                 }
                 return;
             }
@@ -1066,6 +1232,62 @@ namespace C2B_FBR_Connect.Forms
             else
             {
                 GenerateMultiplePDFs(checkedInvoices);
+            }
+        }
+
+        private async Task BtnArchiveSelected_ClickAsync()
+        {
+            var checkedInvoices = GetCheckedInvoices();
+            if (checkedInvoices.Count == 0)
+            {
+                ShowWarning("Please select invoices to archive using the checkboxes.", "No Selection");
+                return;
+            }
+
+            var archivableInvoices = checkedInvoices.Where(i => i.Status != "Archived").ToList();
+            if (archivableInvoices.Count == 0)
+            {
+                ShowInfo("All selected invoices are already archived.", "Nothing to Archive");
+                return;
+            }
+
+            await ArchiveInvoicesAsync(archivableInvoices);
+        }
+
+        private void UpdateActionButtonStates()
+        {
+            var checkedInvoices = GetCheckedInvoices();
+            bool hasSelection = checkedInvoices.Count > 0;
+
+            // Upload: enabled if any pending/failed (non-archived)
+            bool canUpload = checkedInvoices.Any(i => (i.Status == "Pending" || i.Status == "Failed"));
+            btnUploadSelected.Enabled = canUpload;
+
+            // Generate PDF: enabled if any uploaded
+            bool canGeneratePdf = checkedInvoices.Any(i => i.Status == "Uploaded");
+            btnGeneratePDF.Enabled = canGeneratePdf;
+
+            // Archive: enabled if any non-archived
+            bool canArchive = checkedInvoices.Any(i => i.Status != "Archived");
+            btnArchiveSelected.Enabled = canArchive;
+
+            // Update button appearance when disabled
+            UpdateButtonAppearance(btnUploadSelected, canUpload, SuccessColor);
+            UpdateButtonAppearance(btnGeneratePDF, canGeneratePdf, Color.FromArgb(155, 89, 182));
+            UpdateButtonAppearance(btnArchiveSelected, canArchive, ArchiveColor);
+        }
+
+        private void UpdateButtonAppearance(Button button, bool enabled, Color enabledColor)
+        {
+            if (enabled)
+            {
+                button.BackColor = enabledColor;
+                button.ForeColor = Color.White;
+            }
+            else
+            {
+                button.BackColor = Color.FromArgb(200, 200, 200);
+                button.ForeColor = Color.FromArgb(130, 130, 130);
             }
         }
 
@@ -1083,38 +1305,44 @@ namespace C2B_FBR_Connect.Forms
 
             try
             {
-                var invoicesToUpload = invoices.Where(i => i.Status != "Uploaded").ToList();
-                var alreadyUploadedCount = invoices.Count - invoicesToUpload.Count;
+                var invoicesToUpload = invoices.Where(i => i.Status != "Uploaded" && i.Status != "Archived").ToList();
+                var alreadyUploadedCount = invoices.Count(i => i.Status == "Uploaded");
+                var archivedCount = invoices.Count(i => i.Status == "Archived");
 
                 if (invoicesToUpload.Count == 0)
                 {
-                    ShowInfo("All selected invoices are already uploaded.", "Nothing to Upload");
+                    ShowInfo("All selected invoices are already uploaded or archived.", "Nothing to Upload");
                     ClearSelectionsForInvoices(invoices);
                     return;
                 }
 
-                if (alreadyUploadedCount > 0)
+                if (alreadyUploadedCount > 0 || archivedCount > 0)
                 {
-                    var msg = $"{alreadyUploadedCount} invoice(s) already uploaded and will be skipped.\n" +
-                              $"Proceed to upload {invoicesToUpload.Count} pending invoice(s)?";
+                    var msg = "";
+                    if (alreadyUploadedCount > 0)
+                        msg += $"{alreadyUploadedCount} invoice(s) already uploaded.\n";
+                    if (archivedCount > 0)
+                        msg += $"{archivedCount} invoice(s) are archived.\n";
+                    msg += $"\nProceed to upload {invoicesToUpload.Count} pending invoice(s)?";
+
                     if (!ShowConfirmDialog(msg, "Confirm Upload"))
                         return;
                 }
 
+                // Simple marquee - no value tracking needed
+                progressBar.Style = ProgressBarStyle.Marquee;
                 progressBar.Visible = true;
-                progressBar.Style = ProgressBarStyle.Blocks;
-                progressBar.Minimum = 0;
-                progressBar.Maximum = invoicesToUpload.Count;
-                progressBar.Value = 0;
 
                 int uploaded = 0;
                 int failed = 0;
+                int skipped = 0;
                 var failedInvoices = new List<(string InvoiceNumber, string Error)>();
                 var successfullyUploadedIds = new List<int>();
 
-                foreach (var invoice in invoicesToUpload)
+                for (int i = 0; i < invoicesToUpload.Count; i++)
                 {
-                    statusLabel.Text = $"Uploading {invoice.InvoiceNumber}... ({progressBar.Value + 1}/{invoicesToUpload.Count})";
+                    var invoice = invoicesToUpload[i];
+                    statusLabel.Text = $"Uploading {invoice.InvoiceNumber}... ({i + 1}/{invoicesToUpload.Count})";
 
                     try
                     {
@@ -1127,9 +1355,24 @@ namespace C2B_FBR_Connect.Forms
                         }
                         else
                         {
-                            failed++;
-                            var errorMsg = response.ErrorMessage ?? "Unknown error - no error message returned";
-                            failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
+                            // Check if it was actually uploaded by concurrent request
+                            if (response.ErrorMessage?.Contains("already uploaded") == true ||
+                                response.ErrorMessage?.Contains("already been uploaded") == true)
+                            {
+                                skipped++;
+                                successfullyUploadedIds.Add(invoice.Id); // Still remove from selection
+                            }
+                            else if (response.ErrorMessage?.Contains("currently being uploaded") == true)
+                            {
+                                skipped++;
+                                // Don't add to failed list - it's in progress
+                            }
+                            else
+                            {
+                                failed++;
+                                var errorMsg = response.ErrorMessage ?? "Unknown error";
+                                failedInvoices.Add((invoice.InvoiceNumber, errorMsg));
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -1137,8 +1380,6 @@ namespace C2B_FBR_Connect.Forms
                         failed++;
                         failedInvoices.Add((invoice.InvoiceNumber, $"Exception: {ex.Message}"));
                     }
-
-                    progressBar.Value++;
                 }
 
                 foreach (var id in successfullyUploadedIds)
@@ -1155,7 +1396,14 @@ namespace C2B_FBR_Connect.Forms
                 progressBar.Visible = false;
 
                 UpdateSelectedCount();
-                statusLabel.Text = $"Upload complete: {uploaded} success, {failed} failed";
+                UpdateActionButtonStates();
+
+                // Better status message
+                var statusParts = new List<string>();
+                if (uploaded > 0) statusParts.Add($"{uploaded} uploaded");
+                if (skipped > 0) statusParts.Add($"{skipped} skipped");
+                if (failed > 0) statusParts.Add($"{failed} failed");
+                statusLabel.Text = $"Upload complete: {string.Join(", ", statusParts)}";
 
                 ShowUploadResults(uploaded, failed, failedInvoices);
             }
@@ -1163,6 +1411,91 @@ namespace C2B_FBR_Connect.Forms
             {
                 progressBar.Visible = false;
                 ShowError("Upload Error", $"An error occurred during upload: {ex.Message}");
+            }
+        }
+
+        private async Task ArchiveInvoicesAsync(List<Invoice> invoices)
+        {
+            if (invoices == null || invoices.Count == 0) return;
+
+            var confirmMsg = invoices.Count == 1
+                ? $"Archive invoice {invoices[0].InvoiceNumber}?"
+                : $"Archive {invoices.Count} selected invoices?";
+
+            if (!ShowConfirmDialog(confirmMsg, "Confirm Archive"))
+                return;
+
+            try
+            {
+                SetBusyState(true, "Archiving invoices...");
+
+                int archived = 0;
+                foreach (var invoice in invoices)
+                {
+                    if (invoice.Status != "Archived")
+                    {
+                        _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, "Archived", invoice.FBR_IRN, null);
+                        _selectedInvoiceIds.Remove(invoice.Id);
+                        archived++;
+                    }
+                }
+
+                await LoadInvoicesAsync();
+                UpdateSelectedCount();
+                UpdateActionButtonStates();
+
+                ShowSuccess($"Successfully archived {archived} invoice(s).");
+            }
+            catch (Exception ex)
+            {
+                ShowError("Archive Error", ex.Message);
+            }
+            finally
+            {
+                SetBusyState(false, "Ready");
+            }
+        }
+
+        private async Task UnarchiveInvoicesAsync(List<Invoice> invoices)
+        {
+            if (invoices == null || invoices.Count == 0) return;
+
+            var confirmMsg = invoices.Count == 1
+                ? $"Unarchive invoice {invoices[0].InvoiceNumber}?"
+                : $"Unarchive {invoices.Count} selected invoices?";
+
+            if (!ShowConfirmDialog(confirmMsg, "Confirm Unarchive"))
+                return;
+
+            try
+            {
+                SetBusyState(true, "Unarchiving invoices...");
+
+                int unarchived = 0;
+                foreach (var invoice in invoices)
+                {
+                    if (invoice.Status == "Archived")
+                    {
+                        // Restore to appropriate status based on FBR_IRN
+                        string newStatus = string.IsNullOrEmpty(invoice.FBR_IRN) ? "Pending" : "Uploaded";
+                        _db.UpdateInvoiceStatus(invoice.QuickBooksInvoiceId, newStatus, invoice.FBR_IRN, null);
+                        unarchived++;
+                    }
+                }
+
+                await LoadInvoicesAsync();
+                UpdateSelectedCount();
+                UpdateActionButtonStates();
+
+                ShowSuccess($"Successfully unarchived {unarchived} invoice(s).");
+            }
+            catch (Exception ex)
+            {
+                ShowError("Unarchive Error", ex.Message);
+            }
+            finally
+            {
+                SetBusyState(false, "Ready");
             }
         }
 
@@ -1174,6 +1507,7 @@ namespace C2B_FBR_Connect.Forms
             }
             RefreshCheckboxStates();
             UpdateSelectedCount();
+            UpdateActionButtonStates();
         }
 
         private void RefreshCheckboxStates()
@@ -1193,8 +1527,9 @@ namespace C2B_FBR_Connect.Forms
         private void UpdateSelectedCount()
         {
             var count = _selectedInvoiceIds.Count;
-            btnUploadSelected.Text = count > 0 ? $"📤 Upload ({count})" : "📤 Upload Selected";
+            btnUploadSelected.Text = count > 0 ? $"📤 Upload ({count})" : "📤 Upload";
             btnGeneratePDF.Text = count > 0 ? $"📄 PDF ({count})" : "📄 Generate PDF";
+            btnArchiveSelected.Text = count > 0 ? $"📦 Archive ({count})" : "📦 Archive";
         }
 
         private async Task ShowInvoiceDetailsAsync(Invoice invoice)
@@ -1606,9 +1941,24 @@ namespace C2B_FBR_Connect.Forms
 
         private void ShowUploadResults(int uploaded, int failed, List<(string InvoiceNumber, string Error)> failedInvoices)
         {
-            if (failedInvoices.Count == 0)
+            // No failures - show success
+            if (failedInvoices.Count == 0 && uploaded > 0)
             {
                 ShowSuccess($"All {uploaded} invoice(s) uploaded successfully!");
+                return;
+            }
+
+            // All failed, none uploaded
+            if (uploaded == 0 && failedInvoices.Count > 0)
+            {
+                // Show the detailed error dialog
+                // (falls through to the existing code below)
+            }
+
+            // Nothing happened (edge case)
+            if (uploaded == 0 && failedInvoices.Count == 0)
+            {
+                ShowInfo("No invoices were uploaded.", "Upload Complete");
                 return;
             }
 
@@ -1770,6 +2120,7 @@ namespace C2B_FBR_Connect.Forms
 
             dgvInvoices.Refresh();
             UpdateSelectedCount();
+            UpdateActionButtonStates();
         }
 
         private void SetBusyState(bool busy, string statusText)
@@ -1779,9 +2130,17 @@ namespace C2B_FBR_Connect.Forms
             progressBar.Style = busy ? ProgressBarStyle.Marquee : ProgressBarStyle.Blocks;
 
             btnFetchInvoices.Enabled = !busy;
-            btnUploadSelected.Enabled = !busy;
-            btnGeneratePDF.Enabled = !busy;
-            btnRefresh.Enabled = !busy;
+
+            if (!busy)
+            {
+                UpdateActionButtonStates();
+            }
+            else
+            {
+                btnUploadSelected.Enabled = false;
+                btnGeneratePDF.Enabled = false;
+                btnArchiveSelected.Enabled = false;
+            }
         }
 
         private void CleanupServices()

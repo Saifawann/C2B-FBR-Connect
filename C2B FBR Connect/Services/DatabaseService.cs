@@ -1,6 +1,7 @@
 ﻿using C2B_FBR_Connect.Models;
 using System;
 using System.Collections.Generic;
+using System.Data.Common;
 using System.Data.SQLite;
 using System.IO;
 using System.Threading;
@@ -1340,6 +1341,8 @@ namespace C2B_FBR_Connect.Services
             }, "GetInvoiceWithDetails");
         }
 
+
+
         public void UpdateInvoiceStatus(string qbInvoiceId, string status, string irn, string error)
         {
             ExecuteWithRetry(() =>
@@ -1545,5 +1548,291 @@ namespace C2B_FBR_Connect.Services
         }
 
         #endregion
+
+        // ============================================
+        // ADD THESE TO YOUR DatabaseService.cs
+        // ============================================
+
+        #region Upload Lock Methods
+
+        /// <summary>
+        /// Result of attempting to lock an invoice for upload
+        /// </summary>
+        public class UploadLockResult
+        {
+            public bool Success { get; set; }
+            public string Message { get; set; }
+        }
+
+        /// <summary>
+        /// Atomically check if invoice can be uploaded and lock it.
+        /// Returns success only if status was "Pending" or "Failed" and successfully changed to "Uploading"
+        /// This is the SINGLE source of truth for preventing duplicate uploads.
+        /// </summary>
+        public UploadLockResult TryLockInvoiceForUpload(string quickBooksInvoiceId, string companyName)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                using var transaction = conn.BeginTransaction();
+                try
+                {
+                    // Step 1: Read current state
+                    var checkCmd = new SQLiteCommand(@"
+                SELECT Status, FBR_IRN, ModifiedDate 
+                FROM Invoices 
+                WHERE QuickBooksInvoiceId = @qbId 
+                AND CompanyName = @company", conn, transaction);
+
+                    checkCmd.Parameters.AddWithValue("@qbId", quickBooksInvoiceId);
+                    checkCmd.Parameters.AddWithValue("@company", companyName);
+
+                    string currentStatus = null;
+                    string existingIRN = null;
+                    DateTime? modifiedDate = null;
+
+                    using (var reader = checkCmd.ExecuteReader())
+                    {
+                        if (!reader.Read())
+                        {
+                            return new UploadLockResult
+                            {
+                                Success = false,
+                                Message = "Invoice not found in database"
+                            };
+                        }
+
+                        currentStatus = reader["Status"]?.ToString();
+                        existingIRN = reader["FBR_IRN"] != DBNull.Value ? reader["FBR_IRN"].ToString() : null;
+                        modifiedDate = reader["ModifiedDate"] != DBNull.Value
+                            ? Convert.ToDateTime(reader["ModifiedDate"])
+                            : (DateTime?)null;
+                    }
+
+                    // Step 2: Check if already uploaded (has IRN)
+                    if (!string.IsNullOrEmpty(existingIRN))
+                    {
+                        return new UploadLockResult
+                        {
+                            Success = false,
+                            Message = $"Invoice already uploaded to FBR (IRN: {existingIRN})"
+                        };
+                    }
+
+                    // Step 3: Check if already being uploaded
+                    if (currentStatus == "Uploading")
+                    {
+                        // Check if it's a stale lock (older than 5 minutes)
+                        if (modifiedDate.HasValue && DateTime.Now - modifiedDate.Value > TimeSpan.FromMinutes(5))
+                        {
+                            // Stale lock - allow override (will be set to Uploading below)
+                            Console.WriteLine($"⚠️ Overriding stale upload lock (started {modifiedDate.Value:HH:mm:ss})");
+                        }
+                        else
+                        {
+                            return new UploadLockResult
+                            {
+                                Success = false,
+                                Message = "Invoice is currently being uploaded. Please wait."
+                            };
+                        }
+                    }
+
+                    // Step 4: Check if already successfully uploaded
+                    if (currentStatus == "Uploaded")
+                    {
+                        return new UploadLockResult
+                        {
+                            Success = false,
+                            Message = "Invoice has already been uploaded"
+                        };
+                    }
+
+                    // Step 5: Check if archived
+                    if (currentStatus == "Archived")
+                    {
+                        return new UploadLockResult
+                        {
+                            Success = false,
+                            Message = "Cannot upload archived invoice"
+                        };
+                    }
+
+                    // Step 7: Only allow upload from Pending or Failed status
+                    if (currentStatus != "Pending" && currentStatus != "Failed" && currentStatus != "Uploading")
+                    {
+                        return new UploadLockResult
+                        {
+                            Success = false,
+                            Message = $"Cannot upload invoice with status: {currentStatus}"
+                        };
+                    }
+
+                    // Step 8: Acquire lock by setting status to "Uploading"
+                    var updateCmd = new SQLiteCommand(@"
+                UPDATE Invoices 
+                SET Status = 'Uploading', 
+                    ErrorMessage = NULL,
+                    ModifiedDate = @modified
+                WHERE QuickBooksInvoiceId = @qbId 
+                AND CompanyName = @company", conn, transaction);
+
+                    updateCmd.Parameters.AddWithValue("@qbId", quickBooksInvoiceId);
+                    updateCmd.Parameters.AddWithValue("@company", companyName);
+                    updateCmd.Parameters.AddWithValue("@modified", DateTime.Now);
+
+                    int rowsAffected = updateCmd.ExecuteNonQuery();
+
+                    if (rowsAffected == 0)
+                    {
+                        return new UploadLockResult
+                        {
+                            Success = false,
+                            Message = "Failed to acquire upload lock - invoice may have been modified"
+                        };
+                    }
+
+                    transaction.Commit();
+
+                    return new UploadLockResult
+                    {
+                        Success = true,
+                        Message = "Lock acquired"
+                    };
+                }
+                catch (Exception ex)
+                {
+                    transaction.Rollback();
+                    return new UploadLockResult
+                    {
+                        Success = false,
+                        Message = $"Database error: {ex.Message}"
+                    };
+                }
+            }, "TryLockInvoiceForUpload");
+        }
+
+        /// <summary>
+        /// Reset invoices stuck in "Uploading" status back to "Pending"
+        /// Call this on app startup to recover from crashes
+        /// </summary>
+        public int ResetStuckUploadingInvoices(string companyName, TimeSpan maxUploadDuration)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cutoffTime = DateTime.Now - maxUploadDuration;
+
+                var cmd = new SQLiteCommand(@"
+            UPDATE Invoices 
+            SET Status = 'Pending', 
+                ErrorMessage = 'Reset: Previous upload attempt did not complete',
+                ModifiedDate = @modified
+            WHERE CompanyName = @company 
+            AND Status = 'Uploading'
+            AND (ModifiedDate IS NULL OR ModifiedDate < @cutoff)", conn);
+
+                cmd.Parameters.AddWithValue("@company", companyName);
+                cmd.Parameters.AddWithValue("@cutoff", cutoffTime);
+                cmd.Parameters.AddWithValue("@modified", DateTime.Now);
+
+                int count = cmd.ExecuteNonQuery();
+
+                if (count > 0)
+                {
+                    Console.WriteLine($"🔄 Reset {count} stuck uploading invoice(s) back to Pending");
+                }
+
+                return count;
+            }, "ResetStuckUploadingInvoices");
+        }
+
+        /// <summary>
+        /// Get invoice by QuickBooks ID (useful for checking current state)
+        /// </summary>
+        public Invoice GetInvoiceByQuickBooksId(string quickBooksInvoiceId, string companyName)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+            SELECT * FROM Invoices 
+            WHERE QuickBooksInvoiceId = @qbId 
+            AND CompanyName = @company", conn);
+
+                cmd.Parameters.AddWithValue("@qbId", quickBooksInvoiceId);
+                cmd.Parameters.AddWithValue("@company", companyName);
+
+                using var reader = cmd.ExecuteReader();
+                if (reader.Read())
+                {
+                    return MapInvoiceFromReader(reader);
+                }
+
+                return null;
+            }, "GetInvoiceByQuickBooksId");
+        }
+
+        public List<Invoice> GetInvoicesByStatus(string companyName, string status)
+        {
+            return ExecuteWithRetry(() =>
+            {
+                var invoices = new List<Invoice>();
+
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+            SELECT * FROM Invoices 
+            WHERE CompanyName = @company AND Status = @status", conn);
+
+                cmd.Parameters.AddWithValue("@company", companyName);
+                cmd.Parameters.AddWithValue("@status", status);
+
+                using var reader = cmd.ExecuteReader();
+                while (reader.Read())
+                {
+                    invoices.Add(MapInvoiceFromReader(reader));
+                }
+
+                return invoices;
+            }, "GetInvoicesByStatus");
+        }
+
+        public void MarkStuckUploadsAsFailed(string companyName)
+        {
+            ExecuteWithRetry(() =>
+            {
+                using var conn = new SQLiteConnection(_connectionString);
+                conn.Open();
+
+                var cmd = new SQLiteCommand(@"
+            UPDATE Invoices 
+            SET Status = 'Failed', 
+                ErrorMessage = 'Upload interrupted - please verify in FBR portal',
+                ModifiedDate = @modified
+            WHERE CompanyName = @company 
+            AND Status = 'Uploading'", conn);
+
+                cmd.Parameters.AddWithValue("@company", companyName);
+                cmd.Parameters.AddWithValue("@modified", DateTime.Now);
+
+                int count = cmd.ExecuteNonQuery();
+
+                if (count > 0)
+                    Console.WriteLine($"⚠️ Marked {count} stuck upload(s) as Failed");
+
+                return true;
+            }, "MarkStuckUploadsAsFailed");
+        }
+
+        #endregion
+
     }
 }
